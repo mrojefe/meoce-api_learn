@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """MEOCE learn-API — entry point.
 
 Rebuilt by hand from meoce-api/ as a learning exercise.
@@ -57,3 +58,18 @@ def get_instrument(symbol: str):
 
             
     return {"data": None}    
+=======
+"""MEOCE API — entry point."""
+from fastapi import FastAPI
+
+from app.api.v1.router import router as v1_router
+from app.core.config import API_VERSION
+
+app = FastAPI(
+    title="MEOCE API",
+    description="The MEOCE API, rebuilt by hand.",
+    version=API_VERSION,
+)
+
+app.include_router(v1_router)
+>>>>>>> refactor/layers
