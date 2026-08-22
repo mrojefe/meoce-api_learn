@@ -2,7 +2,8 @@
 from fastapi import FastAPI
 
 from app.api.v1.router import router as v1_router
-from app.core.config import API_VERSION
+from app.core.errors import register_error_handler
+from app.core.constant import API_VERSION 
 
 app = FastAPI(
     title="MEOCE API",
@@ -10,4 +11,5 @@ app = FastAPI(
     version=API_VERSION,
 )
 
+register_error_handler(app)
 app.include_router(v1_router)

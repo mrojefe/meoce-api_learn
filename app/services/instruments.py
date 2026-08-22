@@ -1,15 +1,7 @@
 """Instruments service — the data and the rules. Knows nothing about HTTP."""
-from app.schemas  import  instruments
 
-
-INSTRUMENTS = [
-    {"symbol": "SNTS", "name": "Sonatel", "type": "stock", "sector": "telecom"},
-    {"symbol": "BOAB", "name": "Bank of Africa Bénin", "type": "stock", "sector": "finance"},
-    {"symbol": "SGBC", "name": "Société Générale CI", "type": "stock", "sector": "finance"},
-    {"symbol": "BRVM10", "name": "BRVM 10", "type": "index", "sector": None},
-    {"symbol": "SNTS", "name": "Sonatel", "type": "stock", "sector": "telecom","internal_note": "do not show"},
-    {"symbol":"ORAC","name":"Orange Côte d’Ivoire","type":"stock","sector":"telecommunications"}
-]
+from app.core.errors import NotFoundError, ConflictError
+from app.core.constant import INSTRUMENTS
 
 
 def list_instruments(
@@ -25,10 +17,22 @@ def list_instruments(
     return rows[:limit]
 
 
-def get_by_symbol(symbol: str) -> dict | None:
+def get_by_symbol(symbol: str) -> dict :
     for row in INSTRUMENTS:
         if row["symbol"] == symbol.upper():
-            return row
+            return row      
+    raise  NotFoundError("this symbol doesn't exist")  
+
+
+def get_summary_by_symbol(symbol:str)-> dict:
+        for row in INSTRUMENTS:
+            if row["symbol"] == symbol.upper():
+                symbol=row.get('symbol')
+                return {"summary":f"the market is close for {symbol}"}
+        raise  NotFoundError("this symbol doesn't exist")            
+
+
+
 
 def create_instrument(symbol: str, name: str, type_: str,
                      sector: str | None = None) -> dict:
@@ -40,7 +44,7 @@ def create_instrument(symbol: str, name: str, type_: str,
                   }
     for instrument in INSTRUMENTS:
         if instrument["symbol"] == new_instrument["symbol"]:
-            raise ValueError("This instrument already exist")
+            raise ConflictError("This instrument already exist")
 
            
     INSTRUMENTS.append(new_instrument)
