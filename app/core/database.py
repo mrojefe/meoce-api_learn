@@ -1,0 +1,115 @@
+"""PostgreSQL access — one connection pool for the whole application.
+
+The pool is opened once at startup and closed at shutdown (see the lifespan in
+main.py). Nothing here knows about HTTP; services call `query()` and get rows.
+"""
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
+from app.core.config import get_settings
+
+_pool : ConnectionPool | None = None
+
+
+
+def conninfo() -> str:
+    """Builds the PostgreSQL connection string from the application settings.
+
+    This is the only place the database password is unwrapped from its
+    SecretStr. The returned string contains that password in clear text, so it
+    must never be logged or included in an error message.
+
+    Returns:
+        str: A libpq connection string, e.g.
+            "host=127.0.0.1 port=5433 dbname=postgres user=postgres password=..."
+    """
+    s = get_settings()
+    
+    connection_info= (
+        f"host={s.postgres_host} port={s.postgres_port} dbname={s.postgres_db} "
+        f"user={s.postgres_user} password={s.postgres_password.get_secret_value()}"
+    )
+
+    return connection_info
+
+def open_pool() -> None:
+    """Creates the connection pool. Call once, at application startup.
+
+    `global` is required because the assignment must update the module-level
+    `_pool`, not create a local copy.
+
+    Returns:
+        None
+
+    Examples:
+        >>> open_pool()          # in the lifespan, before the first request
+    """
+    global _pool
+    _pool = ConnectionPool(
+        conninfo= conninfo(),
+        min_size=1, 
+        max_size=5, 
+        kwargs={"row_factory": dict_row})
+
+
+
+def get_pool() -> ConnectionPool:
+    """Returns the open pool.
+
+    Every other module asks for the pool through this function rather than
+    importing `_pool` directly, so how it is stored can change in one place.
+
+    Returns:
+        ConnectionPool: The pool created by `open_pool()`.
+
+    Raises:
+        RuntimeError: If the pool was never opened — which means the
+            application did not start correctly.
+    """
+    if _pool is None:
+        raise RuntimeError("pool not opened — did the app start correctly?")
+    return _pool
+    
+def close_pool() -> None:
+    """Closes the pool and forgets it. Call once, at application shutdown.
+
+    Without this, connections stay open on the PostgreSQL side after every
+    redeploy until the server times them out. Setting `_pool` back to None
+    means a later `get_pool()` raises a clear error instead of handing out a
+    closed pool.
+
+    Returns:
+        None
+    """
+    global _pool 
+    if _pool is not None:
+        _pool.close()
+        _pool = None
+
+def query(sql: str, params: tuple = ()) -> list[dict]:
+    """Runs a SELECT and returns every row.
+
+    The connection is borrowed from the pool and given back when the `with`
+    block ends, including when an exception is raised. Rows arrive as dicts
+    because the pool sets `row_factory=dict_row`.
+
+    Values must always be passed through `params`, never formatted into `sql`
+    with an f-string: psycopg sends the query and the values separately, so a
+    value can never be read as SQL.
+
+    Args:
+        sql (str): The statement, with `%s` placeholders for every value.
+        params (tuple, optional): Values for the placeholders, in order.
+            A single value needs a trailing comma: `("SNTS",)`.
+
+    Returns:
+        list[dict]: One dict per row; an empty list if nothing matched.
+
+    Examples:
+        >>> query("SELECT symbol FROM instruments WHERE type = %s LIMIT 2", ("bond",))
+        [{'symbol': 'AFD.O1'}, {'symbol': 'BABS.O1'}]
+    """
+    with get_pool().connection() as conn:
+        with conn.cursor() as cur :
+            cur.execute(sql, params)
+            
+            return cur.fetchall()        

@@ -12,14 +12,33 @@ from fastapi import FastAPI, Request
 from starlette.exceptions import  HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from app.schemas.common import ErrorEnvelope
-from app.core.enum import ErrorStatus ,ErrorCode
+from app.core.enums import ErrorStatus ,ErrorCode
 import logging
+
 logger = logging.getLogger("meoce.api")
 
 
 
 
 class ApiError(Exception):
+    """Base class for every business error the API raises deliberately.
+
+    Carries the three things the error contract needs. Services raise these
+    instead of returning an error value, because an exception cannot be
+    ignored by a caller who forgets to check.
+
+    Handlers catch `ApiError`, which catches every subclass — so a new error
+    type is handled the day it is written, without touching the handler.
+
+    Args:
+        code (ErrorCode): Stable, machine-readable. The frontend branches on
+            this and never on the message.
+        message (str): For humans reading logs. May be reworded freely.
+        status (ErrorStatus): The HTTP status the handler will use.
+
+    Examples:
+        >>> raise ApiError(ErrorCode.VALIDATION, "bad input", ErrorStatus.UNPROCESSABLE_ENTITY)
+    """
     
     def __init__(self, code:ErrorCode, message:str, 
                 status:ErrorStatus = ErrorStatus.BAD_REQUEST):
@@ -30,12 +49,35 @@ class ApiError(Exception):
         super().__init__(message)
 
 class NotFoundError(ApiError):
+    """The requested resource does not exist. Always 404.
+
+    The status is fixed here so a caller cannot raise a "not found" with the
+    wrong code.
+
+    Args:
+        message (str): What was not found, for the log.
+
+    Examples:
+        >>> raise NotFoundError("this symbol doesn't exist")
+    """
 
     def __init__(self, message: str,code: ErrorCode=ErrorCode.NOT_FOUND, 
                 status:ErrorStatus = ErrorStatus.NOT_FOUND ):
         super().__init__(code,message, status)
 
 class ConflictError(ApiError):
+    """The request is valid but clashes with the current state. Always 409.
+
+    Used when the input is well-formed and the operation still cannot proceed —
+    creating an instrument whose symbol already exists, for example. Distinct
+    from 400 (malformed) and 422 (breaks a rule).
+
+    Args:
+        message (str): What the conflict is, for the log.
+
+    Examples:
+        >>> raise ConflictError("This instrument already exist")
+    """
 
     def __init__(self, message: str , code:ErrorCode=ErrorCode.CONFLICT , 
                 status: ErrorStatus = ErrorStatus.CONFLICT):
@@ -43,19 +85,66 @@ class ConflictError(ApiError):
         super().__init__(code,message,status)
 
 
-def _error_response(message,code:ErrorCode,status:ErrorStatus,details=None) ->JSONResponse:
+def _error_response(message, code: ErrorCode, status: ErrorStatus, details=None) -> JSONResponse:
+    """Builds the one and only failure body: {"error": {code, message, status}}.
+
+    The single place that knows the error shape, so it cannot drift between the
+    four handlers. Built through ErrorEnvelope rather than as a raw dict, so a
+    mistake raises here instead of shipping a malformed body.
+
+    Returns a JSONResponse rather than a dict because exception handlers sit
+    outside the route system: there is no declared status_code for FastAPI to
+    apply, so the response must be constructed.
+
+    Args:
+        message (str): Human-readable, for logs and developers.
+        code (ErrorCode): Stable machine-readable code.
+        status (ErrorStatus): HTTP status, used both in the status line and
+            mirrored inside the body.
+        details (optional): Extra structured information. Safe for validation
+            errors (the client's own input); never attach it to a 500.
+
+    Returns:
+        JSONResponse: The response, ready to return from a handler.
+
+    Examples:
+        >>> _error_response("No instrument NOPE", ErrorCode.NOT_FOUND, ErrorStatus.NOT_FOUND)
+    """
 
     body = {"code":code , "message": message, "status": status}
-    if details  : 
-        body["details"] = details
+
 
     content = ErrorEnvelope(error=body).model_dump()
+    if details  : 
+        content["details"] = details
+    else:
+        content.pop("details",None)
+
     return JSONResponse(
         status_code=status,
         content= content,
     )
 
-def register_error_handler(app: FastAPI) -> None : 
+def register_error_handler(app: FastAPI) -> None:
+    """Attaches the four exception handlers to the application.
+
+    Called once from main.py. Together they guarantee that every failure —
+    ours, FastAPI's, or unexpected — leaves in the same shape:
+
+    1. ApiError            our business errors, and every subclass
+    2. StarletteHTTPException  FastAPI's own 404/405 and any HTTPException
+    3. RequestValidationError  the 422s from body and query validation
+    4. Exception           the catch-all: logs the traceback, leaks nothing
+
+    Args:
+        app (FastAPI): The application to attach the handlers to.
+
+    Returns:
+        None
+
+    Examples:
+        >>> register_error_handler(app)     # in main.py, once
+    """
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError ):
@@ -98,4 +187,3 @@ def register_error_handler(app: FastAPI) -> None :
     async def unhandled_error_handler(request: Request, exc: Exception):
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         return _error_response("Erreur interne", ErrorCode.INTERNAL, ErrorStatus.INTERNAL_SERVER_ERROR )
-    

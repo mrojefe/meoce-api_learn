@@ -1,3 +1,5 @@
+
+
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.14.2
@@ -12,3 +14,6 @@ starlette==1.6.0
 typing-extensions==4.16.0
 typing-inspection==0.4.4
 uvicorn==0.52.1
+psycopg==3.3.4
+psycopg-binary==3.3.4
+psycopg-pool==3.3.1
