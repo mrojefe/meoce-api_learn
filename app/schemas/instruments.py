@@ -3,7 +3,7 @@
 from pydantic import BaseModel, Field , field_validator
 from typing import Annotated
 from app.schemas.common import Symbol 
-from app.core.enum import InstrumentType
+from app.core.enums import InstrumentType
 
 
 
