@@ -13,6 +13,15 @@ Symbol = Annotated[
          examples="SNTS") # Take the first element of AllowedSmbol   
 ]
 
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str
+    env: str
+    db_host: str
+    db_port: int
+
+
 T=TypeVar("T")
 
 
