@@ -6,7 +6,22 @@ from app.core.constant import INSTRUMENTS
 
 from app.core.database import get_pool
 
-def list_instruments(type_=None, sector=None, limit=20) -> tuple[list[dict], int]:
+
+
+def _build_filters(type_ : str | None ) -> tuple[str, tuple[str | None]] :
+
+    filters_types= (type_, type_)
+    where_type= "WHERE (%s::text IS NULL OR type = %s)" 
+    #you can't paste  direclty 
+    # psycopg sends the value separately python would paste as text
+    # eg : " ... type = %s" % ("stock",) -> type = stock  instead of
+    # type == 'stock'
+
+    return where_type,filters_types
+
+
+def list_instruments(type_ : str | None = None, sector: str | None = None,
+                     limit : int | None = 20) -> tuple[list[dict], int]:
     """Lists instruments, optionally filtered by type.
 
     Filtering, ordering and limiting all happen in SQL, so the database never
@@ -25,24 +40,34 @@ def list_instruments(type_=None, sector=None, limit=20) -> tuple[list[dict], int
         limit (int): Maximum number of rows to return.
 
     Returns:
-        tuple[list[dict], int]: The rows, and how many were returned.
+        tuple[list[dict], int]: The rows, and how many existe in total for the filters apply.
 
     Examples:
         >>> list_instruments(type_="bond", limit=2)
-        ([{'symbol': 'AFD.O1', 'name': 'AFD 5.25% 2008-2016', ...}, {...}], 2)
+        ([{'symbol': 'AFD.O1','name': 'AFD 5.25% 2008-2016', 'type': 'bond','status': 'delisted'},
+        {'symbol': 'BABS.O1',   'name': 'GSS BAOBAB 6,80% 2024-2029', 'type': 'bond',  'status': 'active'}],
+        332)
+        
     """
+    where_sql, where_params = _build_filters(type_)
 
-    rows = query( 
-        """
+    sql_rows = """
         SELECT symbol, name, type, status
         FROM instruments
-        WHERE (%s::text IS NULL OR type = %s)
+        """  + where_sql + """
         ORDER BY symbol LIMIT %s            
-        """,
-        (type_, type_, limit),
-    )
+        """
+    sql_total = """
+        SELECT count(*)
+        FROM instruments
+        """+ where_sql      
 
-    return rows ,len(rows)
+    rows = query(sql_rows,(*where_params,limit))
+    total = query(sql_total,(*where_params,))[0].get("count")
+
+
+
+    return rows ,int(total)
 
 def get_by_symbol(symbol: str) -> dict:
     """Fetches one instrument by its BRVM symbol.

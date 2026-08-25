@@ -10,7 +10,7 @@ from app.core.enums import InstrumentType
 
 class InstrumentFilters(BaseModel):
     model_config = {"extra": "forbid"}
-    type: InstrumentType|None = None
+    type: InstrumentType | None = None
     sector:str|None = None
     limit: Annotated[int,Field( ge=1, le=100, description="max rows returned")] = 20
 
