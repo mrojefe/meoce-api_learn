@@ -1,11 +1,12 @@
 """MEOCE API — entry point."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
 from app.api.v1.router import router as v1_router
-from contextlib import asynccontextmanager
+from app.core.config import get_settings
+from app.core.database import close_pool, open_pool
 from app.core.errors import register_error_handler
-from app.core.config  import get_settings 
-from app.core.database import open_pool, close_pool
 
 settings = get_settings()
 

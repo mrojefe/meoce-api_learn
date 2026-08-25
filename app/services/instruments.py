@@ -1,23 +1,9 @@
 """Instruments service — the data and the rules. Knows nothing about HTTP."""
 
-from app.core.errors import NotFoundError, ConflictError
-from app.core.database import query
 from app.core.constant import INSTRUMENTS
-
-from app.core.database import get_pool
-
-
-
-def _build_filters(type_ : str | None ) -> tuple[str, tuple[str | None]] :
-
-    filters_types= (type_, type_)
-    where_type= "WHERE (%s::text IS NULL OR type = %s)" 
-    #you can't paste  direclty 
-    # psycopg sends the value separately python would paste as text
-    # eg : " ... type = %s" % ("stock",) -> type = stock  instead of
-    # type == 'stock'
-
-    return where_type,filters_types
+from app.core.database import query
+from app.core.errors import ConflictError, NotFoundError
+from app.core.functions import _build_filters
 
 
 def list_instruments(type_ : str | None = None, sector: str | None = None,
@@ -49,17 +35,27 @@ def list_instruments(type_ : str | None = None, sector: str | None = None,
         332)
         
     """
-    where_sql, where_params = _build_filters(type_)
+    where_sql, where_params = _build_filters(type_,sector)
 
     sql_rows = """
-        SELECT symbol, name, type, status
-        FROM instruments
-        """  + where_sql + """
+        SELECT  
+            i.symbol, i.name, i.type, 
+            i.status ,s.name as sector
+        FROM instruments AS i
+        LEFT JOIN  sectors AS s
+            ON  s.id = i.sector_id
+        """  + where_sql +  """ 
         ORDER BY symbol LIMIT %s            
         """
+
+    #JOIN LEFT because the most importante is to keep symbol 
+    # if the drop it's not clearly say by a filter from user
+        
     sql_total = """
         SELECT count(*)
         FROM instruments
+        LEFT JOIN  sectors AS s
+            ON  s.id = instruments.sector_id
         """+ where_sql      
 
     rows = query(sql_rows,(*where_params,limit))

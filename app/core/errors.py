@@ -7,13 +7,15 @@ Contrat (ARCHITECTURE_MEOCE_V1.md §2.2) :
 jamais en parsant le message. Aucune stack trace ne sort.
 """
 
-from fastapi.responses import JSONResponse
-from fastapi import FastAPI, Request
-from starlette.exceptions import  HTTPException as StarletteHTTPException
-from fastapi.exceptions import RequestValidationError
-from app.schemas.common import ErrorEnvelope
-from app.core.enums import ErrorStatus ,ErrorCode
 import logging
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.core.enums import ErrorCode, ErrorStatus
+from app.schemas.common import ErrorEnvelope
 
 logger = logging.getLogger("meoce.api")
 
@@ -173,7 +175,6 @@ def register_error_handler(app: FastAPI) -> None:
 
         return _error_response(message, code, status)
 
-     #   
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
         first = exc.errors()[0] # exc.error() it's a list of dict, one dict by error find by pydantic

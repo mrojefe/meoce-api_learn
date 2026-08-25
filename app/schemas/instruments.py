@@ -1,31 +1,32 @@
 """Instrument schemas — the declared shape of instrument data."""
 
-from pydantic import BaseModel, Field , field_validator
 from typing import Annotated
-from app.schemas.common import Symbol 
-from app.core.enums import InstrumentType
 
+from pydantic import BaseModel, Field
 
+from app.core.enums import AllowedSector, AllowedType
+from app.schemas.common import Symbol
 
 
 class InstrumentFilters(BaseModel):
     model_config = {"extra": "forbid"}
-    type: InstrumentType | None = None
-    sector:str|None = None
+    type: AllowedType | None = None
+    sector:AllowedSector|None = None
     limit: Annotated[int,Field( ge=1, le=100, description="max rows returned")] = 20
 
 
 class Instrument(BaseModel):
-    symbol: Symbol
+    symbol: Symbol 
     name: str
-    type: InstrumentType
-    sector: str | None = None
+    type: AllowedType
+    status: str | None
+    sector: AllowedSector | None = None
 
 class InstrumentCreate(BaseModel):
     symbol: Symbol
     name: str = Field(min_length=2, max_length=120)
-    type: InstrumentType = InstrumentType.STOCK
-    sector: str | None = None
+    type: AllowedType = AllowedType.STOCK
+    sector: AllowedSector| None = AllowedSector.INDUSTRIELS
     
 
 

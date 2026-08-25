@@ -2,11 +2,10 @@
 
 
 from functools import lru_cache
-from pydantic import Field, SecretStr
 from typing import Annotated
+
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-
 
 
 class Settings(BaseSettings):

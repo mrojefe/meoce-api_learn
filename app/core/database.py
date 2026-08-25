@@ -3,8 +3,9 @@
 The pool is opened once at startup and closed at shutdown (see the lifespan in
 main.py). Nothing here knows about HTTP; services call `query()` and get rows.
 """
-from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
+
 from app.core.config import get_settings
 
 _pool : ConnectionPool | None = None
@@ -108,8 +109,7 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
         >>> query("SELECT symbol FROM instruments WHERE type = %s LIMIT 2", ("bond",))
         [{'symbol': 'AFD.O1'}, {'symbol': 'BABS.O1'}]
     """
-    with get_pool().connection() as conn:
-        with conn.cursor() as cur :
-            cur.execute(sql, params)
-            
-            return cur.fetchall()        
+    with get_pool().connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        
+        return cur.fetchall()        

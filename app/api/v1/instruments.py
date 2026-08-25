@@ -1,13 +1,12 @@
 """Instruments routes - HTTP only. The work happens in the service."""
 
 from typing import Annotated
-from fastapi import APIRouter, Query  
+
+from fastapi import APIRouter, Query
+
+from app.schemas import instruments as instruments_schemas
+from app.schemas.common import Envelope, ErrorEnvelope, envelope_
 from app.services import instruments as instruments_services
-from app.schemas  import  instruments as instruments_schemas
-from app.schemas.common import envelope_ 
-from app.schemas.common import Envelope, ErrorEnvelope 
-
-
 
 router = APIRouter(prefix="/instruments", tags=["instruments"]) 
 

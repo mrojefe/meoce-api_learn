@@ -1,7 +1,8 @@
 """Liveness probe - see model 01 """
 
 from fastapi import APIRouter
-from app.core.config  import get_settings
+
+from app.core.config import get_settings
 from app.schemas.common import HealthResponse
 
 router = APIRouter(tags=["health"])

@@ -3,7 +3,9 @@ List of all enum use in the api
 """
 
 
-from enum import IntEnum ,StrEnum , unique
+from enum import IntEnum, StrEnum, unique
+
+from app.core.functions import make_enum
 
 
 @unique
@@ -35,15 +37,19 @@ class ErrorCode(StrEnum):
     HTTP_ERROR="http_error"
 
 
-@unique
-class InstrumentType(StrEnum):
-    STOCK="stock"
-    INDEX="index"
-    BOND="bond"
-    RIGHT="right"
-    SUKUK="sukuk"
-
+AllowedType = make_enum("AllowedType", "types",)
+AllowedSymbol = make_enum("AllowedSymbol", "symbols",)
+AllowedSector = make_enum("AllowedSector", "sectors",)
 """
+
+AllowedSymbol = StrEnum(
+    "AllowedSymbol",
+    {
+        instrument["symbol"]: instrument["symbol"]
+        for instrument in INSTRUMENTS
+    },
+)
+
 in the futur take from the db InstrumentType like:
 AllowedSymbol = StrEnum(
     "AllowedSymbol",

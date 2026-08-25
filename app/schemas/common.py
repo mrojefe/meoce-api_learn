@@ -1,17 +1,23 @@
-from typing import Annotated, Generic, TypeVar, Any
-from pydantic import BaseModel, Field ,BeforeValidator
-
-
-
-
+from typing import Annotated, Any, Generic, TypeVar
+from pydantic import BaseModel, BeforeValidator, Field
 
 Symbol = Annotated[
     str,
-    BeforeValidator(lambda v: v.strip().upper() if isinstance(v,str) else v),
-    Field(min_length=2, max_length=12, pattern=r"^[A-Z0-9.]+$",
-         description='BRVM ticker,uppercase - Snts == SNTS',
-         examples=["SNTS"]) # Take the first element of AllowedSmbol   
-] 
+    BeforeValidator(lambda v: v.strip().upper() if isinstance(v, str) else v),
+    Field(min_length=2, max_length=12, pattern=r"^[A-Z0-9. \-]+$",
+    description='BRVM ticker, uppercase - "Snts" becomes "SNTS"',
+    examples=["SNTS"])
+]    
+"""A BRVM ticker.
+
+Deliberately NOT an Enum built from the database. The set of symbols is open:
+it grows every time an instrument is listed, so an enum frozen at startup would
+reject a symbol this very API had just created - until a restart. A pattern
+describes the shape of a valid symbol without claiming to know every one that
+exists. Enums are for closed sets: the types, the sectors.
+"""
+
+
 
 
 class HealthResponse(BaseModel):
