@@ -114,11 +114,13 @@ def _error_response(message, code: ErrorCode, status: ErrorStatus, details=None)
     body = {"code":code , "message": message, "status": status}
 
 
-    content = ErrorEnvelope(error=body).model_dump()
+    
     if details  : 
-        content["details"] = details
+        body["details"] = details
     else:
-        content.pop("details",None)
+        body.pop("details",None)
+
+    content = ErrorEnvelope(error=body).model_dump()    
 
     return JSONResponse(
         status_code=status,
