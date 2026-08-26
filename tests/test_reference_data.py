@@ -11,8 +11,8 @@ They need a reachable database, so they are integration tests, not unit tests.
 
 import pytest
 
+from app.core.database import get_enum
 from app.core.enums import AllowedSector, AllowedType
-from app.core.functions import get_enum
 
 
 @pytest.fixture(scope="module")

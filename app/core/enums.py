@@ -35,7 +35,7 @@ class ErrorCode(StrEnum):
     HTTP_ERROR="http_error"
 
 
-class ReferenceEnum(StrEnum):
+class ReferenceStrEnum(StrEnum):
     """Base for enums that mirror a reference table, tolerant of case.
 
     The member *name* is ours (upper case, underscores — readable in Python);
@@ -55,7 +55,7 @@ class ReferenceEnum(StrEnum):
             value: Whatever the caller passed. Only strings can match.
 
         Returns:
-            ReferenceEnum | None: The matching member, or None — and None is
+            ReferenceStrEnum | None: The matching member, or None — and None is
                 what produces the 422 listing the allowed values.
         """
         if isinstance(value, str):
@@ -67,7 +67,7 @@ class ReferenceEnum(StrEnum):
 
 
 @unique
-class AllowedType(ReferenceEnum):
+class AllowedType(ReferenceStrEnum):
     """The instrument types, mirroring the `instrument_types` table.
 
     Hardcoded on purpose, and kept honest by tests/test_reference_data.py,
@@ -91,7 +91,7 @@ class AllowedType(ReferenceEnum):
 
 
 @unique
-class AllowedSector(ReferenceEnum):
+class AllowedSector(ReferenceStrEnum):
     """The sectors, mirroring the `sectors` table.
 
     Same reasoning as AllowedType, and guarded by the same test. Values keep

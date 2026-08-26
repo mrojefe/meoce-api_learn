@@ -3,7 +3,60 @@
 from app.core.constant import INSTRUMENTS
 from app.core.database import query
 from app.core.errors import ConflictError, NotFoundError
-from app.core.functions import _build_filters
+
+
+def _build_filters(type_ : str | None , sector : str | None) -> tuple[str, tuple[str | None]] :
+    """Builds the WHERE clause shared by the page query and the count query.
+
+    A list endpoint asks the database two questions: "give me this page" and
+    "how many exist in total". Both must apply *the same* filter, or the client
+    receives 14 rows next to a total of 429 and builds a pager for pages that do
+    not exist. Written twice, the two clauses drift apart the first time a
+    filter is added — so it is written once, here.
+
+    The clause and its parameters are returned together on purpose: the number
+    of `%s` in the text must match the number of values in the tuple, exactly
+    and in order. Splitting them across two functions would recreate the same
+    drift one level down.
+
+    Each filter has the same shape::
+
+        (%s::text IS NULL OR column = %s)
+
+    When the value is None, psycopg sends NULL, `NULL IS NULL` is true and the
+    OR short-circuits: no filtering. When a value is given, the left side is
+    false and the comparison applies. One switch, two behaviours, and no `if`
+    in Python. The `::text` cast is required because Postgres cannot infer the
+    type of a bare parameter compared to NULL.
+
+    Note:
+        The sector condition references `s.name`, so the caller must alias the
+        `sectors` table as `s`. That coupling is the price of sharing the
+        clause between two queries; it is deliberate, not an oversight.
+
+    Args:
+        type_ (str | None): Instrument type to keep, or None for no filter.
+        sector (str | None): Sector name to keep, or None for no filter.
+
+    Returns:
+        tuple[str, tuple]: The WHERE clause, and the parameters it expects.
+
+    Examples:
+        >>> clause, params = _build_filters("bond", None)
+        >>> params
+        ('bond', 'bond', None, None)
+    """
+    filters_types= (type_, type_,sector,sector)
+    where_type= """
+                    WHERE (%s::text IS NULL OR type = %s) 
+                    AND (%s::text IS NULL OR s.name = %s) 
+                """ 
+    #you can't paste  direclty 
+    # psycopg sends the value separately python would paste as text
+    # eg : " ... type = %s" % ("stock",) -> type = stock  instead of
+    # type == 'stock'
+
+    return where_type,filters_types
 
 
 def list_instruments(type_ : str | None = None, sector: str | None = None,
