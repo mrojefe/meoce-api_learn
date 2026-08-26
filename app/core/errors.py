@@ -152,13 +152,26 @@ def register_error_handler(app: FastAPI) -> None:
 
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError ):
+        """Turns any ApiError raised by a service into the error contract.
+
+        Registered on the base class, so NotFoundError, ConflictError and every
+        future subclass are handled the day they are written. The service that
+        raised it knows nothing about HTTP; this is where the status is applied.
+        """
         return _error_response( exc.message, exc.code, exc.status)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(
         request: Request,
         exc: StarletteHTTPException,
-    ):  
+    ):
+        """Rewrites Starlette's own HTTP errors into the same contract.
+
+        404 on an unknown route and 405 on a wrong method are raised by the
+        framework, before any of our code runs. Without this handler they would
+        return Starlette's `{"detail": ...}` — a second error shape a client
+        would have to special-case.
+        """
         if exc.status_code == 405:
             code = ErrorCode.METHOD_NOT_ALLOWED
             status = ErrorStatus.METHOD_NOT_ALLOWED
@@ -177,6 +190,16 @@ def register_error_handler(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError):
+        """Turns Pydantic's 422 into one readable message plus full details.
+
+        `message` carries the first problem only, phrased for a human. `details`
+        carries every problem, structured, for a client that wants to highlight
+        each bad field.
+
+        Attaching details is safe here and only here: the content is the
+        client's own input echoed back. A 500 never gets details, because there
+        the content would be ours.
+        """
         first = exc.errors()[0] # exc.error() it's a list of dict, one dict by error find by pydantic
         field = ".".join(str(p) for p in first["loc"][1:])  # drop "query"/"body"
         message = f"{field}: {first['msg']}"  # nb: it's the first error message from pydantic
@@ -188,5 +211,12 @@ def register_error_handler(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception):
+        """Last resort: log the full traceback, return a body that says nothing.
+
+        Anything reaching here is a bug. The traceback goes to the logs, where
+        it is needed; the response carries a generic message, because a stack
+        trace tells an attacker the file layout, the library versions and often
+        the SQL.
+        """
         logger.exception("Unhandled error on %s %s", request.method, request.url.path)
         return _error_response("Erreur interne", ErrorCode.INTERNAL, ErrorStatus.INTERNAL_SERVER_ERROR )

@@ -12,6 +12,18 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Opens the connection pool before the first request, closes it after the last.
+
+    Everything before `yield` runs once at startup, everything after runs once
+    at shutdown, and the application runs at the `yield`. Opening the pool here
+    rather than at import means a failure to reach the database stops the
+    application from starting, loudly, instead of surfacing as a 500 on the
+    first request.
+
+    Args:
+        app (FastAPI): The application being started. Required by the
+            signature FastAPI expects, unused here.
+    """
     open_pool()          # before the first request
     yield                # the app runs
     close_pool()         # after the last one

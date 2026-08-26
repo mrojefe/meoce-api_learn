@@ -3,6 +3,7 @@
 The pool is opened once at startup and closed at shutdown (see the lifespan in
 main.py). Nothing here knows about HTTP; services call `query()` and get rows.
 """
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -113,3 +114,46 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
         cur.execute(sql, params)
         
         return cur.fetchall()        
+
+def direct_query(sql: str, params: tuple | None = None) -> list[dict]:
+    """Runs one SELECT on its own short-lived connection, outside the pool.
+
+    `query()` in app/core/database.py is the normal way to reach the database.
+    This function exists for the one case `query()` cannot serve: code that runs
+    at **import time**, before the application starts and therefore before the
+    pool is opened by the lifespan. Building the reference enums is that case.
+
+    Because it opens and closes a connection on every call, it is far more
+    expensive than the pool. Use it only for the handful of queries that happen
+    once at startup — never inside a request.
+
+    Args:
+        sql (str): The statement. Values must be passed as `%s` placeholders,
+            never formatted into the string.
+        params (tuple | None): Values for the placeholders, in order.
+
+    Returns:
+        list[dict]: Every row, one dict per row (`dict_row` row factory).
+
+    Examples:
+        >>> direct_query("SELECT name FROM sectors LIMIT 1")
+        [{'name': 'INDUSTRIELS'}]
+    """
+    s = get_settings()
+
+    psycopg_connector = psycopg.connect(
+        host = s.postgres_host,
+        port = s.postgres_port,
+        dbname = s.postgres_db,
+        user = s.postgres_user,
+        password =  s.postgres_password.get_secret_value(),
+        row_factory = dict_row, 
+    ) 
+
+    with psycopg_connector, psycopg_connector.cursor() as cur: 
+        cur.execute(sql,params)
+        rows =cur.fetchall()
+    
+    return rows
+
+

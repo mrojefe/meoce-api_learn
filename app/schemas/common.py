@@ -1,4 +1,11 @@
+"""Shapes shared by every endpoint: the envelopes, the meta block, Symbol.
+
+Success and failure each have exactly one shape here, so a client writes one
+unwrapping function instead of one per endpoint.
+"""
+
 from typing import Annotated, Any, Generic, TypeVar
+
 from pydantic import BaseModel, BeforeValidator, Field
 
 Symbol = Annotated[
@@ -59,7 +66,7 @@ def envelope_(
             data, 
             count: int | None = None, 
             as_of: str | None = None,
-            details: dict[str, Any] = None
+            details: dict[str, Any] | None = None
         ) -> dict:
     """Builds a success response body in the {data, meta} contract.
 
