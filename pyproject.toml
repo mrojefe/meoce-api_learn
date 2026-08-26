@@ -1,0 +1,28 @@
+[project]
+name = "meoce-api-learn"
+version = "0.1.0"
+description = "The MEOCE API, rebuilt by hand."
+readme = "README.md"
+requires-python = ">=3.11"
+
+# What the API needs to RUN. Anything imported by app/ or main.py belongs here.
+dependencies = [
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "psycopg[binary,pool]>=3.3.4",
+]
+
+# What YOU need to WORK. Never shipped to production.
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.14.0",
+    "jupyterlab>=4.6.3",
+    "ipykernel>=7.3.0",
+    "pandas>=3.0.5",
+]
+
+[tool.ruff]
+line-length = 100
