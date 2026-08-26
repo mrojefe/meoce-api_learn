@@ -110,3 +110,41 @@ class AllowedSector(ReferenceStrEnum):
     CONSOMMATION_DISCRETIONNAIRE = "CONSOMMATION DISCRETIONNAIRE"
     CONSOMMATION_DE_BASE = "CONSOMMATION DE BASE"
     ENERGIE = "ENERGIE"
+
+
+@unique
+@unique
+class AllowedExchange(ReferenceStrEnum):
+    """The exchanges, mirroring the `exchanges` table (as of 2026-08-26).
+
+    Same reasoning as AllowedType: a closed set that changes when MEOCE opens a
+    new market, so it lives in code and the database stays the authority
+    through the foreign key. Add a row to `exchanges` and this list must follow.
+
+    Values are the exchange **codes**, exactly as stored, because that is what
+    a caller passes as `?exchange=` and what the SQL compares to `code`.
+    """
+    BRVM = "BRVM"
+    NGX = "NGX"
+
+
+@unique
+class AllowedCurrencieCode(ReferenceStrEnum):
+    """The currency codes, mirroring the `currencies` table (as of 2026-08-26).
+
+    ISO 4217 codes, as stored. Used when a caller overrides the currency an
+    instrument would otherwise inherit from its exchange — a Eurobond listed on
+    the BRVM but quoted in USD, for example.
+
+    Note:
+        The class name is misspelled: "Currencie" should be "Currency"
+        (singular *currency*, plural *currencies*). Worth renaming, but it is a
+        rename across several files rather than a docstring fix.
+    """
+    XOF = "XOF"
+    EUR = "EUR"
+    NGN = "NGN"
+    MAD = "MAD"
+    ZAR = "ZAR"
+    USD = "USD"
+

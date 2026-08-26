@@ -1,6 +1,7 @@
 """Instruments service — the data and the rules. Knows nothing about HTTP."""
 
-from app.core.constant import INSTRUMENTS
+from psycopg.errors import UniqueViolation
+
 from app.core.database import query
 from app.core.errors import ConflictError, NotFoundError
 from app.core.functions import _build_filters
@@ -21,12 +22,15 @@ def list_instruments(type_ : str | None = None, sector: str | None = None,
         type_ (str | None): Instrument type — "stock", "index", "bond",
             "right" or "sukuk". None means no filter. Named with a trailing
             underscore because `type` is a Python builtin.
-        sector (str | None): Not implemented yet — the sector name lives in the
-            `sectors` table and needs a JOIN (module 08).
+        sector (str | None): Sector name, e.g. "INDUSTRIELS". None means no
+            filter. Reached through a LEFT JOIN on `sectors`, and filtered in
+            SQL — never in Python, or `limit` would cut before the filter ran.
         limit (int): Maximum number of rows to return.
 
     Returns:
-        tuple[list[dict], int]: The rows, and how many existe in total for the filters apply.
+        tuple[list[dict], int]: The rows, and the **total** number matching the
+            filters — not the number returned. A client needs the total to
+            build a pager; the number returned it can count itself.
 
     Examples:
         >>> list_instruments(type_="bond", limit=2)
@@ -65,39 +69,71 @@ def list_instruments(type_ : str | None = None, sector: str | None = None,
 
     return rows ,int(total)
 
-def get_by_symbol(symbol: str) -> dict:
-    """Fetches one instrument by its BRVM symbol.
+def get_by_symbol(symbol: str, exchange: str | None = None) -> dict:
+    """Fetches one instrument by its symbol, and optionally its exchange.
 
-    The lookup is case-insensitive and tolerant of surrounding spaces: the
-    symbol is stripped and uppercased before querying, so "  snts " finds SNTS.
+    Case and spacing are already handled: `Symbol` and `AllowedExchange`
+    normalise them in the schema, so this function receives canonical values
+    and does not repeat the work.
+
+    A symbol is only unique **per exchange** — the table's unique constraint is
+    on (exchange_id, symbol) — so the same ticker may legitimately exist on the
+    BRVM and on the NGX. When the caller does not say which, and several match,
+    this refuses with a 409 naming the exchanges rather than returning an
+    arbitrary one. For market data a silently wrong exchange is a wrong price,
+    which is worse than an inconvenient error (exercise E-20).
 
     Args:
-        symbol (str): BRVM ticker, e.g. "SNTS" or "BOAB.DA1".
+        symbol (str): Ticker, e.g. "SNTS" or "BOAB.DA1". Case-insensitive.
+        exchange (str | None): Exchange code, e.g. "BRVM" or "NGX". None means
+            no filter, which is safe while a symbol is unambiguous.
 
     Returns:
-        dict: The instrument — symbol, name, type, country_code, status.
+        dict: The instrument — symbol, name, type, country_code, status and
+            exchange_id. The response model drops what it does not declare.
 
     Raises:
-        NotFoundError: If no instrument carries that symbol. The router turns
-            it into a 404 in the error contract; this function knows nothing
-            about HTTP.
+        NotFoundError: No instrument carries that symbol (404).
+        ConflictError: The symbol exists on several exchanges and none was
+            given (409). The message names them, so the caller can retry.
 
     Examples:
         >>> get_by_symbol("abjc")
         {'symbol': 'ABJC', 'name': "SERVAIR ABIDJAN COTE D'IVOIRE", ...}
+        >>> get_by_symbol("boab", exchange="NGX")
+        {'symbol': 'BOAB', ...}
     """
-    symbol =  symbol.upper().strip()
+    where_sql ="""WHERE (symbol = %s) 
+                AND  (
+                 %s::text IS NULL OR
+                exchange_id = (SELECT id FROM exchanges WHERE code = %s)
+                )"""
     rows = query( 
         """
-        SELECT symbol, name, type, country_code, status
+        SELECT symbol, name, type, country_code, status ,exchange_id
         FROM instruments
-        WHERE (symbol = %s)
-        ORDER BY symbol            
-        """,
-        (symbol, ),
-    )
+        """ + where_sql + """
+        ORDER BY symbol
+        """,           
+        
+        (symbol,exchange,exchange ),
+    )# we can take exchange_id , the response_model will throw it away,anyway!
+
     if not rows:             
         raise  NotFoundError("this symbol doesn't exist") 
+    if (len(rows) >= 2) :
+
+        rows_exchange_id = list({row["exchange_id"] for row in rows})  # set: unique values
+        
+        raw_existing_exchanges=query(""" SELECT code FROM exchanges WHERE id = ANY(%s) """,
+                                    (rows_exchange_id,)
+                                    )
+        existing_exchanges = [row["code"] for row in raw_existing_exchanges]
+
+        raise ConflictError(
+            f"{symbol} exists on {len(rows)} exchanges "
+            f"({', '.join(existing_exchanges)}) — specify one with ?exchange="
+        )
         
     return rows[0] # response_model in route gey_by_symbol  is waiting for Envelope[Instrument]    
 
@@ -106,37 +142,90 @@ def get_by_symbol(symbol: str) -> dict:
 
 
 def create_instrument(symbol: str, name: str, type_: str,
-                      sector: str | None = None) -> dict:
-    """Creates an instrument.
+                    exchange: str , sector: str,
+                    currency_code: str | None = None) -> dict:
+    """Inserts an instrument and returns the row the database wrote.
 
-    NOT YET MIGRATED to the database: this still appends to the in-memory
-    INSTRUMENTS list, so anything created here disappears when the server
-    restarts. It becomes an SQL INSERT in module 08.
+    The caller supplies names — "INDUSTRIELS", "BRVM" — while the table stores
+    identifiers. Rather than look each one up in Python and pass the id along,
+    the INSERT resolves them itself with scalar subqueries. If a name matches
+    nothing the subquery yields NULL, the NOT NULL constraint refuses the whole
+    statement, and no partial row survives.
+
+    `currency_code` is optional and defaults to the currency of the exchange:
+    an instrument listed on the NGX is priced in NGN unless stated otherwise.
+    The override exists because reality is messier than the rule — a Eurobond
+    can be listed on the BRVM and quoted in USD.
+
+    Duplicates are decided by the database, not here. A prior SELECT would be
+    wrong twice: it loses the race (two requests can both find nothing and both
+    insert), and it uses the wrong definition — the unique constraint is on
+    (exchange_id, symbol), so the same ticker on two exchanges is legitimate.
+    Catching UniqueViolation is checked atomically and uses the real rule.
+
+    RETURNING gives back what was actually stored, including the columns the
+    database filled in itself, rather than echoing the request back.
 
     Args:
-        symbol (str): BRVM ticker. Already normalised by the InstrumentCreate
-            schema (stripped and uppercased) before it arrives here.
+        symbol (str): Ticker, already normalised by `Symbol` in the schema.
         name (str): Full instrument name.
-        type_ (str): "stock", "index", "bond", "right" or "sukuk".
-        sector (str | None): Sector name, optional.
+        type_ (str): One of the values in `instrument_types`, e.g. "stock".
+        exchange (str): Exchange code, e.g. "BRVM" or "NGX". Required — a
+            default would silently list NGX instruments on the BRVM.
+        sector (str): Sector name, e.g. "INDUSTRIELS".
+        currency_code (str | None): ISO code. None means "use the exchange's
+            currency".
 
     Returns:
-        dict: The created instrument.
+        dict: The inserted row — symbol, name, type, sector_id, exchange_id,
+            currency_code.
 
     Raises:
-        ConflictError: If an instrument with that symbol already exists. The
-            router turns it into a 409.
-    """
-    new_instrument = {
-                  "symbol":symbol , 
-                  "name":name,
-                  "type":type_,
-                  "sector":sector
-                  }
-    for instrument in INSTRUMENTS:
-        if instrument["symbol"] == new_instrument["symbol"]:
-            raise ConflictError("This instrument already exist")
+        ConflictError: That symbol already exists **on that exchange** (409).
 
-           
-    INSTRUMENTS.append(new_instrument)
+    Examples:
+        >>> create_instrument("TESTX", "Test", "stock", "NGX", "INDUSTRIELS")
+        {'symbol': 'TESTX', 'currency_code': 'NGN', ...}
+    """
+
+    #must stay the last to drop easly           
+    new_instrument = (symbol, name.upper(),
+                     type_, sector, exchange, currency_code )
+
+    
+    sql_defaut_curruency_code = """ SELECT currency_code FROM exchanges WHERE code = %s  """
+    params_default_currency_code = (exchange,) if isinstance(exchange,str) else None
+   
+    # create tuple from new_instrument,respect the order and without 'currency_code'   
+    params_add_symbol= new_instrument[:-1]
+    sql_add_symbol = """ 
+            INSERT INTO instruments(symbol,name,type,sector_id,exchange_id,currency_code)
+            VALUES  (%s, %s,%s,
+                    (SELECT id FROM sectors WHERE name = %s),
+                    (SELECT id FROM exchanges WHERE code = %s), 
+                    %s) 
+            RETURNING symbol,name,type,sector_id,exchange_id,currency_code ,status       
+        """
+    
+ 
+    # nb: query return always  list of dict eg:for  exchange NGX ,
+    #without query(...)[0]["currency_code"] we got [{'currency_code': 'NGN'}]
+
+    if  currency_code is None :
+        #add currency_code from the default
+        defaut_currency_code =  query(
+                    sql_defaut_curruency_code,
+                    params_default_currency_code
+                )[0]["currency_code"]
+
+        params_add_symbol+=  (defaut_currency_code,) 
+
+    elif isinstance(currency_code, str) :
+        params_add_symbol += (currency_code,)
+
+    try :
+        new_instrument = query( sql_add_symbol, params_add_symbol )[0]        
+    except UniqueViolation:
+        raise ConflictError("This instrument already exist")
+                                        
     return   new_instrument

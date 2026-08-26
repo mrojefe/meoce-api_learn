@@ -138,4 +138,4 @@ def get_enum(countries : bool = False, sectors : bool = False,
 
     return rows
 
-# 1. The reusable factory function
+    

@@ -67,6 +67,8 @@ class NotFoundError(ApiError):
                 status:ErrorStatus = ErrorStatus.NOT_FOUND ):
         super().__init__(code,message, status)
 
+
+
 class ConflictError(ApiError):
     """The request is valid but clashes with the current state. Always 409.
 

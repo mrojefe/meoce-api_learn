@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import AllowedSector, AllowedType
+from app.core.enums import AllowedCurrencieCode, AllowedExchange, AllowedSector, AllowedType
 from app.schemas.common import Symbol
 
 
@@ -53,9 +53,36 @@ class InstrumentCreate(BaseModel):
 
     symbol: Symbol
     name: str = Field(min_length=2, max_length=120)
-    type: AllowedType = AllowedType.STOCK
-    sector: AllowedSector| None = AllowedSector.INDUSTRIELS
+    type: Annotated [AllowedType, Field(description= "without giving, the default ('stock') will be applied",
+            examples=["stock","right"], ),  ] = AllowedType.STOCK
+    sector: AllowedSector
+    exchange: AllowedExchange 
+    currency_code : Annotated[AllowedCurrencieCode | None, 
+                            Field(description= """"
+                            currency code is not requierd the default 
+                            will be allowed from the currency where the exchange is located
+                            """), ] = None
     
+
+class InstrumentCheckExchange(BaseModel):
+    """The optional `?exchange=` of GET /instruments/{symbol}.
+
+    One field, and a model rather than a bare parameter for two reasons: the
+    description reaches `/docs`, and the value is resolved against
+    AllowedExchange — so "ngx" arrives at the service as "NGX".
+
+    Optional by design. Requiring it would burden every caller for a problem
+    that only exists for symbols listed twice; defaulting it to "BRVM" would
+    hide the problem instead — the caller who meant NGX would silently receive
+    BRVM prices. Absent and ambiguous therefore means 409, never a guess.
+    """
+
+    exchange: Annotated[AllowedExchange | None, Field(
+        description= """the exchange is not requiert but keep in 
+        mind that differente exchange can have the same symbol 
+        so we recommend you to precise because we woon't guess and return error if many fit
+        """, )
+    ] = None
 
 
 
