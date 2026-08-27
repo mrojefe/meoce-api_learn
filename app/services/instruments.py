@@ -3,12 +3,53 @@
 from psycopg.errors import UniqueViolation
 
 from app.core.database import query
+from app.core.enums import AllowedSort
 from app.core.errors import ConflictError, NotFoundError
 from app.core.functions import _build_filters
 
 
+def _order_by(sort: AllowedSort | None) -> str:
+    """Builds the ORDER BY clause from an already-validated sort column.
+
+    The only f-string in this file that reaches SQL, and the only one allowed.
+    A column name cannot be a `%s` parameter — values travel to the server
+    separately from the statement, identifiers are part of it — so the name has
+    to be written into the text. What makes that safe is where it comes from:
+    never the caller's string, only `AllowedSort`, a handful of literals typed
+    by hand in app/core/enums.py. Anything else was refused as a 422 by the
+    schema long before this function runs.
+
+    Every order ends with `symbol` as a tie-breaker. Without one the sort is
+    not deterministic: 375 instruments share a type, and Postgres may return
+    those in any sequence, so page 2 can repeat rows from page 1 or skip them
+    entirely — silently. `symbol` is unique, which makes the order total and
+    pagination honest.
+
+    Columns are qualified with the `i` alias because `instruments` and
+    `sectors` both have a `name`; unqualified, Postgres refuses it as
+    ambiguous.
+
+    Args:
+        sort (AllowedSort | None): The validated column, or None for the
+            default order by symbol.
+
+    Returns:
+        str: An ORDER BY clause, e.g. "ORDER BY i.type, i.symbol".
+
+    Examples:
+        >>> _order_by(None)
+        'ORDER BY i.symbol'
+        >>> _order_by(AllowedSort.TYPE)
+        'ORDER BY i.type, i.symbol'
+    """
+    if sort is None or sort is AllowedSort.SYMBOL:
+        return "ORDER BY i.symbol"
+    return f"ORDER BY i.{sort.value}, i.symbol"
+
+
 def list_instruments(type_ : str | None = None, sector: str | None = None,
-                     limit : int | None = 20) -> tuple[list[dict], int]:
+                     limit : int | None = 20, offset: int = 0,
+                     sort: AllowedSort | None = None) -> tuple[list[dict], int]:
     """Lists instruments, optionally filtered by type.
 
     Filtering, ordering and limiting all happen in SQL, so the database never
@@ -48,8 +89,9 @@ def list_instruments(type_ : str | None = None, sector: str | None = None,
         FROM instruments AS i
         LEFT JOIN  sectors AS s
             ON  s.id = i.sector_id
-        """  + where_sql +  """ 
-        ORDER BY symbol LIMIT %s            
+        """  + where_sql + f"""
+        {_order_by(sort)}
+        LIMIT %s OFFSET %s
         """
 
     #JOIN LEFT because the most importante is to keep symbol 
@@ -62,7 +104,8 @@ def list_instruments(type_ : str | None = None, sector: str | None = None,
             ON  s.id = instruments.sector_id
         """+ where_sql      
 
-    rows = query(sql_rows,(*where_params,limit))
+    rows = query(sql_rows,(*where_params,limit,offset))
+
     total = query(sql_total,(*where_params,))[0].get("count")
 
 
@@ -107,7 +150,8 @@ def get_by_symbol(symbol: str, exchange: str | None = None) -> dict:
                 AND  (
                  %s::text IS NULL OR
                 exchange_id = (SELECT id FROM exchanges WHERE code = %s)
-                )"""
+                )""" # %s::text IS NULL OR , help don't have a bug if exchange is None
+    
     rows = query( 
         """
         SELECT symbol, name, type, country_code, status ,exchange_id
@@ -188,7 +232,7 @@ def create_instrument(symbol: str, name: str, type_: str,
         {'symbol': 'TESTX', 'currency_code': 'NGN', ...}
     """
 
-    #must stay the last to drop easly           
+    #currency_code must stay the last to drop easly and neme is standrdize here           
     new_instrument = (symbol, name.upper(),
                      type_, sector, exchange, currency_code )
 

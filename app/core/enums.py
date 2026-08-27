@@ -148,3 +148,35 @@ class AllowedCurrencieCode(ReferenceStrEnum):
     ZAR = "ZAR"
     USD = "USD"
 
+
+@unique
+class AllowedSort(ReferenceStrEnum):
+    """The columns a caller may sort the instrument list by.
+
+    NOT a mirror of a table, unlike AllowedType or AllowedSector: "sortable" is
+    a smaller idea than "exists". Two rules decide what belongs here.
+
+    First, only columns the client can already see. Sorting by a hidden column
+    leaks it — order by a salary nobody may read and you learn who earns most
+    without ever seeing a number.
+
+    Second, and this is why the enum exists at all: a column name cannot be a
+    `%s` parameter. Values travel to the server separately from the statement;
+    identifiers are part of the statement, so the name has to be written into
+    the SQL text. Choosing it from this list means the caller's text never
+    reaches SQL — it only *selects* one of the strings written here.
+    `?sort=symbol; DROP TABLE instruments--` matches no member, so it is a 422
+    and no statement is ever built from it.
+
+    This is the one place in the API where validation is the security control
+    rather than a convenience. Everywhere else, `%s` is.
+
+    Values are the column names exactly as the table spells them: Postgres
+    folds an unquoted identifier to lowercase, but a quoted one it does not, so
+    matching the real spelling stays correct either way.
+    """
+
+    SYMBOL = "symbol"
+    NAME = "name"
+    TYPE = "type"
+    STATUS = "status"

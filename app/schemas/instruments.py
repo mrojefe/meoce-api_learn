@@ -4,7 +4,13 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import AllowedCurrencieCode, AllowedExchange, AllowedSector, AllowedType
+from app.core.enums import (
+    AllowedCurrencieCode,
+    AllowedExchange,
+    AllowedSector,
+    AllowedSort,
+    AllowedType,
+)
 from app.schemas.common import Symbol
 
 
@@ -19,8 +25,17 @@ class InstrumentFilters(BaseModel):
 
     model_config = {"extra": "forbid"}
     type: AllowedType | None = None
-    sector:AllowedSector|None = None
-    limit: Annotated[int,Field( ge=1, le=100, description="max rows returned")] = 20
+    sector:AllowedSector| None = None
+    offset : Annotated[int, Field( ge=0, le=437, description=""" for the pagination ,it between [0, 437]
+                                ,this 428 feel convenient for now where the db contain only 438""")
+                        ] = 0
+    limit: Annotated[int,Field( ge=1, le=100, description="max rows returned between[1,100]")] = 20
+    sort: Annotated[AllowedSort | None, Field(
+        description="""Column to order the list by. Omitted, rows come back by 
+                    symbol. Only columns visible in the response are allowed; 
+                    anything else is a 422.""",
+        examples=["name", "type"],
+    )] = None
 
 
 class Instrument(BaseModel):

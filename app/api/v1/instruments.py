@@ -20,18 +20,25 @@ def list_instruments(payload: Annotated[instruments_schemas.InstrumentFilters, Q
     ignored — a typo like `?tpye=stock` returns 422 rather than the whole list.
 
     Args:
-        payload (InstrumentFilters): type, sector and limit, from the URL.
+        payload (InstrumentFilters): type, sector, limit, offset and sort, read
+            from the query string. `sort` is an enum, so an unknown column is
+            refused here rather than reaching the SQL.
 
     Returns:
         dict: {"data": [...], "meta": {"count": N}}, validated against
-            Envelope[list[Instrument]] on the way out.
+            Envelope[list[Instrument]] on the way out. `count` is the total
+            matching the filters, not the number returned — that is what lets a
+            client build a pager from `limit` and `offset`.
 
     Examples:
         GET /api/v1/instruments?type=bond&limit=2
+        GET /api/v1/instruments?sort=name&limit=5&offset=5
     """
     rows , count = instruments_services.list_instruments(type_=payload.type, 
                                                 sector=payload.sector , 
-                                                limit=payload.limit
+                                                limit=payload.limit,
+                                                offset=payload.offset,
+                                                sort=payload.sort,
                                             )
 
     return envelope_(data=rows,count=count)

@@ -174,18 +174,19 @@ def register_error_handler(app: FastAPI) -> None:
         return Starlette's `{"detail": ...}` — a second error shape a client
         would have to special-case.
         """
-        if exc.status_code == 405:
-            code = ErrorCode.METHOD_NOT_ALLOWED
-            status = ErrorStatus.METHOD_NOT_ALLOWED
-            message = "HTTP method not allowed"
-        elif exc.status_code == 404:
-            code = ErrorCode.NOT_FOUND
-            status = ErrorStatus.NOT_FOUND
-            message = "this route doesn't exist"
-        else:
-            message = str(exc.detail)
-            code = ErrorCode.HTTP_ERROR
-            status = exc.status_code
+        match exc.status_code :
+            case  405:
+                code = ErrorCode.METHOD_NOT_ALLOWED
+                status = ErrorStatus.METHOD_NOT_ALLOWED
+                message = "HTTP method not allowed"
+            case  404:
+                code = ErrorCode.NOT_FOUND
+                status = ErrorStatus.NOT_FOUND
+                message = "this route doesn't exist"
+            case _ : 
+                message = str(exc.detail)
+                code = ErrorCode.HTTP_ERROR
+                status = exc.status_code
             
 
         return _error_response(message, code, status)
