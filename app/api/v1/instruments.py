@@ -2,8 +2,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.core.deps import require_api_key
 from app.schemas import instruments as instruments_schemas
 from app.schemas.common import Envelope, ErrorEnvelope, Symbol, envelope_
 from app.services import instruments as instruments_services
@@ -79,7 +80,10 @@ def get_by_symbol(symbol:Symbol, exchange: Annotated[instruments_schemas.Instrum
     return envelope_(data=rows)
 
 
-@router.post("",status_code=201,response_model=Envelope[instruments_schemas.Instrument])
+@router.post("",status_code=201,
+            response_model=Envelope[instruments_schemas.Instrument],
+            dependencies=[Depends(require_api_key)]
+            )
 def create_instrument(payload: instruments_schemas.InstrumentCreate):
     """Creates an instrument and returns the row the database stored.
 

@@ -28,11 +28,23 @@ class ErrorCode(StrEnum):
     """ All error code stay here """
 
     INTERNAL = "internal_error"
-    VALIDATION= "validation_error"
-    CONFLICT= "conflict_with_current_state"
-    NOT_FOUND= "resource_does_not_exist"
-    METHOD_NOT_ALLOWED= "resource_does_not_have_this_method"
-    HTTP_ERROR="http_error"
+    VALIDATION = "validation_error"
+    CONFLICT = "conflict_with_current_state"
+    NOT_FOUND = "resource_does_not_exist"
+    METHOD_NOT_ALLOWED = "resource_does_not_have_this_method"
+    HTTP_ERROR = "http_error"
+    # Security. All four are carried on a 401, and stay deliberately coarse:
+    # a client needs to know it must re-authenticate, not which half of its
+    # credential was wrong. REVOKED and TOKEN_EXPIRED belong to JWT (module 10)
+    # and are declared here so the vocabulary exists in one place.
+    UNAUTHORIZED = "unauthorized"
+    REVOKED = "token_revoked"
+    TOKEN_EXPIRED = "token_expired"
+    INVALID_TOKEN = "invalid_token"
+
+
+
+
 
 
 class ReferenceStrEnum(StrEnum):

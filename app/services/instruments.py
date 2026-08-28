@@ -256,7 +256,7 @@ def create_instrument(symbol: str, name: str, type_: str,
     #without query(...)[0]["currency_code"] we got [{'currency_code': 'NGN'}]
 
     if  currency_code is None :
-        #add currency_code from the default
+        #add currency_code from the exchange 
         defaut_currency_code =  query(
                     sql_defaut_curruency_code,
                     params_default_currency_code

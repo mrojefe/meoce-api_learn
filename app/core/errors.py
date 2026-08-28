@@ -50,6 +50,9 @@ class ApiError(Exception):
         self.status = status
         super().__init__(message)
 
+
+
+
 class NotFoundError(ApiError):
     """The requested resource does not exist. Always 404.
 
@@ -66,8 +69,6 @@ class NotFoundError(ApiError):
     def __init__(self, message: str,code: ErrorCode=ErrorCode.NOT_FOUND, 
                 status:ErrorStatus = ErrorStatus.NOT_FOUND ):
         super().__init__(code,message, status)
-
-
 
 class ConflictError(ApiError):
     """The request is valid but clashes with the current state. Always 409.
@@ -87,6 +88,40 @@ class ConflictError(ApiError):
                 status: ErrorStatus = ErrorStatus.CONFLICT):
 
         super().__init__(code,message,status)
+
+
+class UnauthorizedError(ApiError):
+    """The caller has not proved who or what it is. Always 401.
+
+    401 and 403 are routinely confused, and the distinction is worth holding:
+
+    * **401 Unauthorized** — *"I do not know who you are."* No credential, or a
+      credential that does not check out. Presenting a valid one may change the
+      answer.
+    * **403 Forbidden** — *"I know exactly who you are, and you still may not."*
+      Retrying with the same identity changes nothing; this is the plan or the
+      role refusing, not the credential.
+
+    So a missing API key is 401. A banned account holding a perfectly valid
+    token is 403 — which is why the real API answers 403 there.
+
+    The message is deliberately vague about *why* it failed. Distinguishing
+    "unknown key" from "expired key" tells an attacker which half of their guess
+    was right.
+
+    Args:
+        message (str): For logs and developers, not for branching on.
+
+    Examples:
+        >>> raise UnauthorizedError("X-API-KEY header required")
+    """
+
+    def __init__(self, message: str , code:ErrorCode=ErrorCode.UNAUTHORIZED , 
+                status: ErrorStatus = ErrorStatus.UNAUTHORIZED):
+
+        super().__init__(code,message,status)
+
+
 
 
 def _error_response(message, code: ErrorCode, status: ErrorStatus, details=None) -> JSONResponse:
