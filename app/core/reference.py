@@ -1,50 +1,18 @@
+"""The domain vocabulary: what values this API accepts for its reference fields.
+
+Instrument types, sectors, exchanges, currencies, and the columns a list may be
+sorted by. Each mirrors a reference table, and `tests/test_reference_data.py`
+fails if a list here and its table ever disagree.
+
+Kept apart from `errors.py`, which holds the *error* vocabulary. Both were once
+in one `enums.py`; they share a Python construct and nothing else.
 """
-List of all enum use in the api 
-"""
 
+from enum import StrEnum, unique
+from functools import lru_cache
+from typing import Any
 
-from enum import IntEnum, StrEnum, unique
-
-
-@unique
-class ErrorStatus(IntEnum):
-    """ All status code stay here """
-
-    OK = 200                  # Read succeeded
-    CREATED = 201             # Resource created
-    NO_CONTENT = 204          # Done; nothing to return
-    BAD_REQUEST = 400         # Malformed request
-    UNAUTHORIZED = 401        # Not authenticated
-    FORBIDDEN = 403           # Authenticated, but not allowed
-    METHOD_NOT_ALLOWED = 405  # Method not autorized 
-    NOT_FOUND = 404           # Resource does not exist
-    CONFLICT = 409             # Conflict with current state
-    UNPROCESSABLE_ENTITY = 422  # Data breaks a business rule
-    TOO_MANY_REQUESTS = 429   # Too many requests
-    INTERNAL_SERVER_ERROR = 500  # Unexpected server error
-
-@unique
-class ErrorCode(StrEnum):   
-    """ All error code stay here """
-
-    INTERNAL = "internal_error"
-    VALIDATION = "validation_error"
-    CONFLICT = "conflict_with_current_state"
-    NOT_FOUND = "resource_does_not_exist"
-    METHOD_NOT_ALLOWED = "resource_does_not_have_this_method"
-    HTTP_ERROR = "http_error"
-    # Security. All four are carried on a 401, and stay deliberately coarse:
-    # a client needs to know it must re-authenticate, not which half of its
-    # credential was wrong. REVOKED and TOKEN_EXPIRED belong to JWT (module 10)
-    # and are declared here so the vocabulary exists in one place.
-    UNAUTHORIZED = "unauthorized"
-    REVOKED = "token_revoked"
-    TOKEN_EXPIRED = "token_expired"
-    INVALID_TOKEN = "invalid_token"
-
-
-
-
+from app.core.db.database import direct_query
 
 
 class ReferenceStrEnum(StrEnum):
@@ -124,7 +92,7 @@ class AllowedSector(ReferenceStrEnum):
     ENERGIE = "ENERGIE"
 
 
-@unique
+
 @unique
 class AllowedExchange(ReferenceStrEnum):
     """The exchanges, mirroring the `exchanges` table (as of 2026-08-26).
@@ -192,3 +160,71 @@ class AllowedSort(ReferenceStrEnum):
     NAME = "name"
     TYPE = "type"
     STATUS = "status"
+
+
+@lru_cache
+def get_enum(countries : bool = False, sectors : bool = False,
+            symbols : bool = False, type_ : bool= False,  ) -> dict[str,Any]:
+    """Reads the reference values the API validates against, from the database.
+
+    The lists of sectors, countries and instrument types are facts owned by the
+    database, not by Python. Reading them here means a sector added in SQL is
+    accepted by the API without editing any code — the alternative, a hardcoded
+    list, is a second copy of the truth that silently goes stale.
+
+    The values are returned **exactly** as stored, with no `.upper()` or
+    `.strip()`. Normalising them here would create precisely the second truth
+    this function exists to avoid: on 2026-08-25 an uppercased copy made every
+    response fail validation, because the database holds 'bond' while the enum
+    had been taught 'BOND'. Tolerance for the caller's case belongs in
+    `make_enum`, not in the stored values.
+
+    Cached with `@lru_cache`: `make_enum` is called once per enum and each call
+    asks for every table, so without the cache the same four tables would be
+    read three times over. The cache never expires, which changes nothing here
+    — the enums it feeds are themselves built once, at import.
+
+    Args:
+        countries (bool): Include the `countries` table.
+        sectors (bool): Include the `sectors` table.
+        symbols (bool): Include every symbol in `instruments`.
+        type_ (bool): Include `instrument_types`, returned under the key "types".
+
+    Returns:
+        dict[str, list[str]]: One key per requested table, each holding its
+            values in database order.
+
+    Examples:
+        >>> get_enum(sectors=True)["sectors"][:2]
+        ['INDUSTRIELS', 'AGRICULTURE']
+    """
+
+
+    bools = [countries,sectors,symbols,type_]
+    tables = ["countries", "sectors", "symbols", "instrument_types" ]
+    selected_tables = [table for table, keep in zip(tables, bools) if keep]
+
+    rows = {}
+    for table in selected_tables :
+   
+        match table :
+            case "symbols":
+                sql =""" SELECT symbol FROM instruments """
+                resultat_query = direct_query(sql)
+                resultat_query=[rq["symbol"] for rq in resultat_query]
+            
+            case "instrument_types" :
+                sql = """ SELECT code FROM instrument_types """  
+                resultat_query = direct_query(sql)
+                resultat_query=[rq["code"] for rq in resultat_query]
+                table="types"
+            
+            case _ : 
+                sql = f"""SELECT name FROM {table} """
+                resultat_query = direct_query(sql)
+                resultat_query=[rq["name"]for rq in resultat_query] 
+
+        
+        rows.update({f"{table}": resultat_query})
+
+    return rows

@@ -42,8 +42,9 @@ class Settings(BaseSettings):
         extra="ignore"
         )
     env : Annotated[str, Field(alias="MEOCE_ENV" )] 
-    api_version : Annotated[str, Field(alias="API_VERSION" )] = "0.2.0" 
+    jwt_secret:Annotated[SecretStr, Field(alias="JWT_SECRET")]
     api_key : Annotated[SecretStr, Field(alias="API_KEY")]
+    api_version : Annotated[str, Field(alias="API_VERSION" )] = "0.2.0" 
 
     postgres_host : Annotated[str, Field(alias="POSTGRES_HOST")]
     postgres_port : Annotated[int, Field(alias="POSTGRES_PORT")] = 5432

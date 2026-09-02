@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-from app.core.enums import (
+from app.core.reference import (
     AllowedCurrencieCode,
     AllowedExchange,
     AllowedSector,

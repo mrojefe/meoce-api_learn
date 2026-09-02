@@ -4,7 +4,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.core.deps import require_api_key
+from app.core.security.deps import require_api_key
 from app.schemas import instruments as instruments_schemas
 from app.schemas.common import Envelope, ErrorEnvelope, Symbol, envelope_
 from app.services import instruments as instruments_services

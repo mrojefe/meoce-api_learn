@@ -8,14 +8,53 @@ jamais en parsant le message. Aucune stack trace ne sort.
 """
 
 import logging
+from enum import IntEnum, StrEnum, unique
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.enums import ErrorCode, ErrorStatus
 from app.schemas.common import ErrorEnvelope
+
+
+class ErrorStatus(IntEnum):
+    """ All status code stay here """
+
+    OK = 200                  # Read succeeded
+    CREATED = 201             # Resource created
+    NO_CONTENT = 204          # Done; nothing to return
+    BAD_REQUEST = 400         # Malformed request
+    UNAUTHORIZED = 401        # Not authenticated
+    FORBIDDEN = 403           # Authenticated, but not allowed
+    METHOD_NOT_ALLOWED = 405  # Method not autorized 
+    NOT_FOUND = 404           # Resource does not exist
+    CONFLICT = 409             # Conflict with current state
+    UNPROCESSABLE_ENTITY = 422  # Data breaks a business rule
+    TOO_MANY_REQUESTS = 429   # Too many requests
+    INTERNAL_SERVER_ERROR = 500  # Unexpected server error
+
+@unique
+class ErrorCode(StrEnum):   
+    """ All error code stay here """
+
+    INTERNAL = "internal_error"
+    VALIDATION = "validation_error"
+    CONFLICT = "conflict_with_current_state"
+    NOT_FOUND = "resource_does_not_exist"
+    METHOD_NOT_ALLOWED = "resource_does_not_have_this_method"
+    HTTP_ERROR = "http_error"
+    # Security. All four are carried on a 401, and stay deliberately coarse:
+    # a client needs to know it must re-authenticate, not which half of its
+    # credential was wrong. REVOKED and TOKEN_EXPIRED belong to JWT (module 10)
+    # and are declared here so the vocabulary exists in one place.
+    UNAUTHORIZED = "unauthorized"
+    TOKEN_REVOKED = "token_revoked"
+    TOKEN_EXPIRED = "token_expired"
+    INVALID_TOKEN = "invalid_token"
+    ACCOUNT_SUPENDED="account_suspended"
+    ACCOUNT_BANNED="account_banned"
+
 
 logger = logging.getLogger("meoce.api")
 

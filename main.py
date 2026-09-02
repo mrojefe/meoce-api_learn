@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
-from app.core.database import close_pool, open_pool
+from app.core.db.database import close_pool, open_pool
 from app.core.errors import register_error_handler
 
 settings = get_settings()

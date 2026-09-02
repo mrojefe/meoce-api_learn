@@ -4,6 +4,8 @@ The pool is opened once at startup and closed at shutdown (see the lifespan in
 main.py). Nothing here knows about HTTP; services call `query()` and get rows.
 """
 
+from contextvars import ContextVar
+
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
@@ -156,3 +158,33 @@ def direct_query(sql: str, params: tuple | None = None) -> list[dict]:
         rows =cur.fetchall()
     
     return rows
+
+
+
+
+_current_actor: ContextVar[str | None] = ContextVar("meoce_current_actor", default=None)
+
+
+def set_current_actor(user_id: str | None) -> None:
+    """Records who the current request belongs to.
+
+    A plain module-level variable would not do: two requests run at the same
+    time, and the second would overwrite the first. Measured — with a global,
+    a request for alice was written under bob's name. A ContextVar keeps one
+    value per request, so each sees only its own.
+
+    Not yet used. It exists for attribution — answering "who wrote this row?",
+    which Postgres cannot answer on its own because every request reaches it
+    as `user=postgres` through the pool.
+
+    Args:
+        user_id (str | None): The authenticated user, or None to clear it.
+            Clearing matters: threads are reused, so an anonymous request that
+            inherited a previous user's id would attribute their write to
+            someone who never made it.
+    """
+    _current_actor.set(user_id)
+
+def get_current_actor() -> str | None:
+    """Returns the user the current request belongs to, or None if anonymous."""
+    return _current_actor.get()

@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "psycopg[binary,pool]>=3.3.4",
+    "pyjwt>=2.13.0",
 ]
 
 # What YOU need to WORK. Never shipped to production.

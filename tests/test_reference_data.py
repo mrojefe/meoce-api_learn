@@ -1,6 +1,6 @@
 """Guards the hardcoded reference enums against the database.
 
-`AllowedType` and `AllowedSector` are written by hand in app/core/enums.py.
+`AllowedType` and `AllowedSector` are written by hand in app/core/reference.py.
 That is deliberate — see their docstrings — but a handwritten copy of someone
 else's data goes stale silently. These tests are what make it fail loudly
 instead: add a sector in SQL without adding it here, and CI turns red with the
@@ -11,8 +11,7 @@ They need a reachable database, so they are integration tests, not unit tests.
 
 import pytest
 
-from app.core.enums import AllowedSector, AllowedType
-from app.core.functions import get_enum
+from app.core.reference import AllowedSector, AllowedType, get_enum
 
 
 @pytest.fixture(scope="module")
@@ -28,7 +27,7 @@ def reference():
 def test_types_match_the_database(reference):
     """Every instrument type in the database exists in AllowedType, and vice versa."""
     assert set(AllowedType) == {AllowedType(v) for v in reference["types"]}, (
-        "instrument_types and AllowedType disagree — update app/core/enums.py"
+        "instrument_types and AllowedType disagree — update app/core/reference.py"
     )
 
 
