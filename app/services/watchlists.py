@@ -12,7 +12,7 @@ not return an empty list — it returns everybody's rows.
 from uuid import UUID
 
 from app.core.db.database import query
-from app.core.errors import ForbiddenError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError
 from app.schemas.plans import PlanFeatures
 
 
@@ -123,6 +123,7 @@ def create_watchlist(
 
     return rows[0]
 
+
 def _require_ownership(user_id: str, watchlist_id: str) -> None:
     """Raises unless this watchlist exists and belongs to this user.
 
@@ -154,6 +155,34 @@ def _require_ownership(user_id: str, watchlist_id: str) -> None:
     # the database returns user_id as a UUID object, not a string
     if rows[0]["user_id"] != UUID(user_id):
         raise ForbiddenError("this watchlist doesn't belong to you")
+
+def _require_instrument_id(symbol: str) -> UUID:
+    """Resolves a symbol to the instrument's id, or raises.
+
+    Extracted once `remove_watchlist_symbol` and `add_watchlist_symbol` both
+    needed the exact same lookup. Both routes only ever receive a symbol
+    (what the caller types), but `watchlist_items` stores `instrument_id` (a
+    uuid) — so both must translate one to the other before they can touch
+    that table.
+
+    Args:
+        symbol (str): The instrument's ticker, already normalised by the
+            `Symbol` type in the schema.
+
+    Returns:
+        UUID: The matching instrument's id.
+
+    Raises:
+        NotFoundError: No instrument has this symbol (404).
+    """
+    sql_instrument = "SELECT id FROM instruments WHERE symbol = %s"
+    params_instrument = symbol
+    rows_instrument = query(sql_instrument, (params_instrument,))
+
+    if not rows_instrument:
+        raise NotFoundError(f"no instrument with symbol {symbol!r}")
+
+    return rows_instrument[0]["id"]
 
 
 def delete_watchlist(user_id: str, watchlist_id: str) -> None:
@@ -205,15 +234,7 @@ def remove_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> Non
     """
     _require_ownership(user_id, watchlist_id)
 
-    sql_instrument = "SELECT id FROM instruments WHERE symbol = %s"
-    params_instrument = symbol
-    rows_instrument = query(sql_instrument, (params_instrument,))
-
-    if not rows_instrument:
-        raise NotFoundError(f"no instrument with symbol {symbol!r}")
-
-    instrument_id = rows_instrument[0]["id"]
-
+    instrument_id = _require_instrument_id(symbol)
 
     sql_remove = """
         DELETE FROM watchlist_items
@@ -223,8 +244,138 @@ def remove_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> Non
 
     query(sql_remove, (*params_remove,), nothing_return=True)
 
+def add_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> None:
+    """Adds one instrument to one of the caller's watchlists.
+
+    Same first two steps as `remove_watchlist_symbol`: prove ownership, then
+    resolve the symbol to an instrument id. Then INSERT instead of DELETE.
+
+    `sort_order` is set with a gap (100, 200, 300...) instead of 1, 2, 3 — so a
+    later "move this item between two others" can insert at 150 without
+    rewriting every other row's number. Only this function needs to know that;
+    reading the list just orders by whatever value is there.
+
+    Adding a symbol already in the list is a conflict, not a silent success —
+    unlike removing an absent one. The caller asked to add something that is
+    already true, and `watchlist_items`'s primary key (watchlist_id,
+    instrument_id) would refuse the insert anyway; checking first lets us
+    return a clear 409 instead of a raw database error.
+
+    Args:
+        user_id (str): The authenticated caller.
+        watchlist_id (str): The list to add the item to.
+        symbol (str): The instrument's ticker, already normalised by the
+            `Symbol` type in the schema.
+
+    Raises:
+        NotFoundError: No watchlist has this id (404), or the symbol matches
+            no instrument (404).
+        ForbiddenError: The watchlist exists and belongs to someone else (403).
+        ConflictError: The symbol is already in this watchlist (409).
+    """
+    _require_ownership(user_id, watchlist_id)
+
+    instrument_id = _require_instrument_id(symbol)
+    sort_order_gap = 100
+
+    sql_exists = """
+        SELECT EXISTS (
+            SELECT 1 FROM watchlist_items
+            WHERE watchlist_id = %s AND instrument_id = %s
+        )
+        """
+    params_exists = (watchlist_id, instrument_id)
+    rows_exists = query(sql_exists, params_exists)
+    if rows_exists[0]["exists"]:
+        raise ConflictError(f"{symbol!r} is already in this watchlist")
+
+    sql_next_order = """
+        SELECT COALESCE(MAX(sort_order), 0) AS last_order
+        FROM watchlist_items
+        WHERE watchlist_id = %s
+        """
+    rows_next_order = query(sql_next_order, (watchlist_id,))
+    last_order = rows_next_order[0]["last_order"]
+    next_order = last_order + sort_order_gap
+
+    sql_insert = """
+        INSERT INTO watchlist_items (watchlist_id, instrument_id, sort_order)
+        VALUES (%s, %s, %s)
+        """
+    params_insert = (watchlist_id, instrument_id, next_order)
+
+    query(sql_insert, params_insert, nothing_return=True)
 
 
+def update_watchlist(
+    user_id: str,
+    watchlist_id: str,
+    fields_set: set[str],
+    name: str | None,
+    description: str | None,
+    is_public: bool | None,
+) -> dict:
+    """Updates only the fields the caller actually sent.
 
+    `fields_set` is `WatchlistUpdate.model_fields_set` from the route — the
+    names that were present in the request body. A field NOT in that set is
+    left out of the SQL entirely, so its value in the row never changes,
+    whatever `None` or `False` the matching argument happens to hold.
+
+    If `fields_set` is empty (`PATCH` with `{}`), there is nothing to build a
+    query for, and nothing to change — this returns the row unchanged instead
+    of running a no-op UPDATE.
+
+    Args:
+        user_id (str): The authenticated caller.
+        watchlist_id (str): The list to update.
+        fields_set (set[str]): Which of name/description/is_public were sent.
+        name (str | None): New name, meaningful only if "name" in fields_set.
+        description (str | None): New description, meaningful only if
+            "description" in fields_set.
+        is_public (bool | None): New visibility, meaningful only if
+            "is_public" in fields_set.
+
+    Returns:
+        dict: The row as it now stands, id and timestamps included.
+
+    Raises:
+        NotFoundError: No watchlist has this id (404).
+        ForbiddenError: The watchlist exists and belongs to someone else (403).
+
+    Examples:
+        >>> update_watchlist(uid, wid, {"name"}, "BRVM tech", None, None)
+        {'id': '...', 'name': 'BRVM tech', 'description': '...', 'is_public': False}
+    """
+    _require_ownership(user_id, watchlist_id)
+
+    candidates = {"name": name, "description": description, "is_public": is_public}
+    changes = {column: value for column, value in candidates.items() if column in fields_set}
+
+    if not changes:
+        sql_unchanged = """
+            SELECT id, name, description, is_public, created_at, updated_at
+            FROM watchlists
+            WHERE id = %s
+            """
+        params_unchanged = watchlist_id    
+        return query(sql_unchanged, (params_unchanged,))[0]
+
+    columns_to_update = changes.keys()
+    set_clause_parts = []
+    for column in columns_to_update:
+        set_clause_parts.append(f"{column} = %s")
+    set_clause = ", ".join(set_clause_parts)
+    sql_update = f"""
+        UPDATE watchlists
+        SET {set_clause}, updated_at = now()
+        WHERE id = %s
+        RETURNING id, name, description, is_public, created_at, updated_at
+        """
+    params_update = (*changes.values(), watchlist_id)
+
+    rows = query(sql_update, params_update)
+
+    return rows[0]
 
 

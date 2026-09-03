@@ -95,6 +95,83 @@ def create_watchlist(
     return envelope_(data=row)
 
 
+@router.post("/{watchlist_id}/items", status_code=201,
+             responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404, 409)})
+def add_item(
+    watchlist_id: UUID,
+    payload: watchlists_schemas.WatchlistItemAdd,
+    user_id: Annotated[str, Depends(get_current_user_id)]):
+    """Adds one instrument to one of the caller's watchlists.
+
+    `symbol` comes from the body here, via `WatchlistItemAdd` — unlike the
+    DELETE route, where it sits in the URL. Both are defensible; this one
+    matches what the real API does for the same endpoint.
+
+    201, not 204: something new now exists. There is nothing meaningful to
+    return in the body though — `add_watchlist_symbol` returns `None` — so
+    this is 201 with an empty body.
+
+    Args:
+        watchlist_id (UUID): The list to add the item to.
+        payload (WatchlistItemAdd): The symbol to add.
+        user_id (str): The authenticated caller, from the token.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        NotFoundError: No such watchlist, or no instrument with that symbol
+            (404).
+        ForbiddenError: The watchlist belongs to someone else (403).
+        ConflictError: The symbol is already in this watchlist (409).
+
+    Examples:
+        POST /api/v1/watchlists/5d5ee2a6-.../items  {"symbol": "SNTS"}
+    """
+    watchlists_services.add_watchlist_symbol(user_id, watchlist_id, payload.symbol)
+
+
+@router.patch("/{watchlist_id}",
+              response_model=Envelope[watchlists_schemas.Watchlist],
+              responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404)})
+def update_watchlist(
+    watchlist_id: UUID,
+    payload: watchlists_schemas.WatchlistUpdate,
+    user_id: Annotated[str, Depends(get_current_user_id)]):
+    """Changes only the fields sent, on one of the caller's watchlists.
+
+    `payload.model_fields_set` is what makes this a PATCH rather than a PUT:
+    it is the set of field names that were actually present in the request
+    body. A field left out of the JSON stays out of the SQL entirely, so an
+    omitted `description` keeps its old value instead of being wiped to NULL
+    — the trap a naive "just UPDATE every column" version would fall into.
+
+    Args:
+        watchlist_id (UUID): The list to update.
+        payload (WatchlistUpdate): Whichever of name/description/is_public
+            the caller sent.
+        user_id (str): The authenticated caller, from the token.
+
+    Returns:
+        dict: {"data": {...}} — the row as it now stands.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        NotFoundError: No such watchlist (404).
+        ForbiddenError: The watchlist belongs to someone else (403).
+
+    Examples:
+        PATCH /api/v1/watchlists/5d5ee2a6-...  {"name": "BRVM tech"}
+    """
+    row = watchlists_services.update_watchlist(
+        user_id=user_id,
+        watchlist_id=watchlist_id,
+        fields_set=payload.model_fields_set,
+        name=payload.name,
+        description=payload.description,
+        is_public=payload.is_public,
+    )
+    return envelope_(data=row)
+
+
 @router.delete("/{watchlist_id}", status_code=204)
 def delete_watchlist(
     watchlist_id: UUID,
@@ -127,8 +204,7 @@ def delete_watchlist(
 def remove_item(
     watchlist_id: UUID,
     symbol: Symbol,
-    user_id: Annotated[str, Depends(get_current_user_id)],
-):
+    user_id: Annotated[str, Depends(get_current_user_id)],):
     """Removes one instrument from one of the caller's watchlists.
 
     204 whether the symbol was in the list or not — see the service docstring
@@ -154,3 +230,4 @@ def remove_item(
         DELETE /api/v1/watchlists/5d5ee2a6-.../items/SNTS
     """
     watchlists_services.remove_watchlist_symbol(user_id, watchlist_id, symbol)
+

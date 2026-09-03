@@ -3,6 +3,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.schemas.common import Symbol
+
 
 class Watchlist(BaseModel):
     """One watchlist, as this API returns it.
@@ -42,5 +44,30 @@ class WatchlistCreate(BaseModel):
         description="Whether other users may see it.")] = False
 
 
+class WatchlistUpdate(BaseModel):
+    """The body accepted by PATCH /watchlists/{id}. Every field is optional.
+
+    A `None` here does NOT mean "clear this field" — it means "not sent,
+    Pydantic filled it in." The service never trusts these values directly;
+    it checks `model_fields_set` first to see which keys were actually in
+    the request body, and only touches those columns.
+    """
+
+    name: Annotated[str | None, Field(
+        default=None, min_length=1, max_length=80,
+        description="New name, if changing it.")]
+    description: Annotated[str | None, Field(
+        default=None, description="New description, if changing it.")]
+    is_public: Annotated[bool | None, Field(
+        default=None, description="New visibility, if changing it.")]
+
+
 class WatchlistItemAdd(BaseModel):
-    symbol: Annotated[str , Field(..., min_length=1, max_length=20)]
+    """The body accepted by POST /watchlists/{id}/items.
+
+    `Symbol` — the same type instruments already use — so "snts" and "SNTS"
+    in the body reach the service as the same value, exactly like the
+    `symbol` path parameter on the DELETE route.
+    """
+
+    symbol: Symbol
