@@ -124,9 +124,9 @@ def create_watchlist(
 
     return rows[0]
 
-
-def _require_ownership(user_id: str, watchlist_id: str) -> None:
-    """Raises unless this watchlist exists and belongs to this user.
+def _require_ownership(user_id: str, watchlist_id: str, read_only: bool = False) -> None:
+    """Raises unless this watchlist exists and belongs to this user — or,
+    with `read_only=True`, unless it exists and is at least public.
 
     Extracted from `delete_watchlist` once a second function
     (`remove_item`) needed the exact same check. Two queries, deliberately —
@@ -135,26 +135,34 @@ def _require_ownership(user_id: str, watchlist_id: str) -> None:
     "yours, but not this one", and the caller wants those to differ (404 vs
     403), so we have to ask first.
 
-    Also what the real API does — `_own_watchlist` in
-    `_real_eg/meoce-api/app/api/v1/watchlists.py` runs the same select-then-act
-    check before every write on a watchlist.
+    `read_only` matches `_own_watchlist(..., read_only=False)` in the real
+    API: every write (delete, rename, add/remove an item) still requires
+    ownership, but reading a list's items is also allowed on someone else's
+    watchlist if they made it public. Every write call in this file leaves
+    `read_only` at its default — only `list_watchlist_items` passes True.
 
     Args:
         user_id (str): The authenticated caller.
         watchlist_id (str): The watchlist being acted on.
+        read_only (bool): If True, a public watchlist owned by someone else
+            passes instead of raising.
 
     Raises:
         NotFoundError: No watchlist has this id (404).
-        ForbiddenError: The watchlist exists and belongs to someone else (403).
+        ForbiddenError: The watchlist exists and neither belongs to this
+            user nor (when read_only) is public.
     """
-    sql_owner = "SELECT user_id FROM watchlists WHERE id = %s"
+    sql_owner = "SELECT user_id, is_public FROM watchlists WHERE id = %s"
     rows = query(sql_owner, (watchlist_id,))
 
     if not rows:
         raise NotFoundError("this watchlist doesn't exist")
 
     # the database returns user_id as a UUID object, not a string
-    if rows[0]["user_id"] != UUID(user_id):
+    is_owner = rows[0]["user_id"] == UUID(user_id)
+    is_public = rows[0]["is_public"]
+
+    if not is_owner and not (read_only and is_public):
         raise ForbiddenError("this watchlist doesn't belong to you")
 
 def delete_watchlist(user_id: str, watchlist_id: str) -> None:
@@ -347,5 +355,53 @@ def update_watchlist(
     rows = query(sql_update, params_update)
 
     return rows[0]
+
+
+def list_watchlist_items(user_id: str, watchlist_id: str) -> tuple[list[dict], int]:
+    """Lists the instruments inside one watchlist — the caller's own, or
+    anyone's if it is public.
+
+    `read_only=True` is what makes this different from every other
+    `_require_ownership` call in this file: those are all writes, which stay
+    owner-only. Reading a *public* list's contents is meant to work for
+    everyone — that is what "public" means — so this is the one place a
+    non-owner can pass.
+
+    Ordered by `sort_order` first, with NULLs last (the gap-based order
+    `add_watchlist_symbol` assigns), then `added_at` as a tie-breaker for
+    rows that share a `sort_order` or have none — same two-column order the
+    real API uses.
+
+    Args:
+        user_id (str): The authenticated caller.
+        watchlist_id (str): The list to read.
+
+    Returns:
+        tuple[list[dict], int]: The rows, and how many there are.
+
+    Raises:
+        NotFoundError: No watchlist has this id (404).
+        ForbiddenError: The watchlist belongs to someone else and is not
+            public (403).
+
+    Examples:
+        >>> list_watchlist_items(uid, wid)
+        ([{'symbol': 'SNTS', 'name': 'Sonatel', 'sector_name': 'TELECOMMUNICATIONS', ...}], 1)
+    """
+    _require_ownership(user_id, watchlist_id, read_only=True)
+
+    sql_items = """
+        SELECT i.symbol, i.name, s.name AS sector_name,
+               wi.sort_order, wi.added_at, wi.alert_enabled, wi.target_price, wi.notes
+        FROM watchlist_items AS wi
+        JOIN instruments AS i ON i.id = wi.instrument_id
+        LEFT JOIN sectors AS s ON s.id = i.sector_id
+        WHERE wi.watchlist_id = %s
+        ORDER BY wi.sort_order NULLS LAST, wi.added_at
+        """
+    params_items = watchlist_id
+    rows = query(sql_items, (params_items,))
+
+    return rows, len(rows)
 
 

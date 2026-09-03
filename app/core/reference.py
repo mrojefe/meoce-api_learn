@@ -9,7 +9,6 @@ in one `enums.py`; they share a Python construct and nothing else.
 """
 
 from enum import StrEnum, unique
-from functools import lru_cache
 from typing import Any
 
 from app.core.db.database import direct_query
@@ -272,7 +271,7 @@ class Feature(ReferenceStrEnum):
     MAX_WATCHLISTS = "max_watchlists"
 
 
-@lru_cache
+
 def get_enum(countries : bool = False, sectors : bool = False,
             symbols : bool = False, type_ : bool= False,
             flag_colors : bool = False,  ) -> dict[str,Any]:

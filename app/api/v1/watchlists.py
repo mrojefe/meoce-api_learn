@@ -51,6 +51,42 @@ def list_watchlists(user_id: Annotated[str, Depends(get_current_user_id)]):
     return envelope_(data=rows, count=count)
 
 
+@router.get("/{watchlist_id}/items",
+            response_model=Envelope[list[watchlists_schemas.WatchlistItem]],
+            responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404)})
+def list_watchlist_items(
+    watchlist_id: UUID,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Returns the instruments inside one watchlist.
+
+    Unlike every other route on this router, a non-owner CAN reach this one
+    — if the list is public. `_require_ownership(read_only=True)` in the
+    service is what allows that; every write route still requires the
+    caller to be the owner.
+
+    Args:
+        watchlist_id (UUID): The list to read.
+        user_id (str): The authenticated caller, from the token.
+
+    Returns:
+        dict: {"data": [...], "meta": {"count": N}}.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        NotFoundError: No such watchlist (404).
+        ForbiddenError: The watchlist belongs to someone else and is not
+            public (403).
+
+    Examples:
+        GET /api/v1/watchlists/5d5ee2a6-75b7-48f8-9e20-68b6ecb62028/items
+    """
+    rows, count = watchlists_services.list_watchlist_items(
+        user_id=user_id, watchlist_id=watchlist_id,
+    )
+    return envelope_(data=rows, count=count)
+
+
 @router.post("", status_code=201,
              response_model=Envelope[watchlists_schemas.Watchlist],
              responses={x: {"model": ErrorEnvelope} for x in (401, 403)})

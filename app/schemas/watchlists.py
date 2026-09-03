@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -71,3 +72,24 @@ class WatchlistItemAdd(BaseModel):
     """
 
     symbol: Symbol
+
+
+class WatchlistItem(BaseModel):
+    """One instrument inside a watchlist, as GET /watchlists/{id}/items
+    returns it.
+
+    Not a copy of `watchlist_items` either: `sector_name` is joined in from
+    `instruments`/`sectors` because the caller wants to show a sector, not
+    look one up separately. `watchlist_id`/`instrument_id` are not
+    returned — the caller already knows which list they asked for, and
+    `symbol` is what identifies the instrument everywhere else in this API.
+    """
+
+    symbol: str
+    name: str
+    sector_name: str | None
+    sort_order: int | None
+    added_at: datetime
+    alert_enabled: bool
+    target_price: float | None
+    notes: str | None
