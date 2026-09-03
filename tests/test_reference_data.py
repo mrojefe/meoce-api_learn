@@ -11,7 +11,7 @@ They need a reachable database, so they are integration tests, not unit tests.
 
 import pytest
 
-from app.core.reference import AllowedSector, AllowedType, get_enum
+from app.core.reference import AllowedSector, AllowedType, Feature, PlanCode, get_enum
 
 
 @pytest.fixture(scope="module")
@@ -57,3 +57,61 @@ def test_value_is_exactly_what_the_database_holds():
     """The member name may differ from the value; the value may not drift."""
     assert AllowedSector.SERVICES_FINANCIERS.value == "SERVICES FINANCIERS"
     assert AllowedType.BOND.value == "bond"
+
+
+@pytest.fixture(scope="module")
+def plans():
+    """Reads the subscription plans once for the whole module.
+
+    Returns:
+        list[dict]: Every row of `subscription_plans`, active or not.
+    """
+    from app.core.db.database import direct_query
+
+    return direct_query("SELECT code, features, is_active FROM subscription_plans")
+
+
+def test_plan_codes_match_the_database(plans):
+    """Every plan in the database is named in PlanCode, and vice versa."""
+    in_db = {p["code"] for p in plans}
+    in_code = {member.value for member in PlanCode}
+    assert in_code == in_db, (
+        f"only in the database: {sorted(in_db - in_code)} | "
+        f"only in the code: {sorted(in_code - in_db)}"
+    )
+
+
+def test_no_unknown_feature_keys(plans):
+    """No plan carries a key that Feature does not name.
+
+    This is the test that catches the typo. A key spelled `max_watchlist`
+    instead of `max_watchlists` reads back as None, which the code treats as
+    *unlimited* — so without this test a single missing letter silently removes
+    a limit, with no error anywhere.
+    """
+    known = {member.value for member in Feature}
+    unknown = {k for p in plans for k in p["features"]} - known
+    assert not unknown, (
+        f"unknown keys in subscription_plans.features: {sorted(unknown)} — "
+        "a typo, or a new feature that must be added to Feature"
+    )
+
+
+def test_every_active_plan_defines_every_feature(plans):
+    """Each active plan should name every feature explicitly.
+
+    A missing key is indistinguishable from `null`, and `null` means unlimited
+    for a limit and false for a switch. Silence therefore *decides* something,
+    and it decides differently depending on the key — which is exactly how
+    `multi_layout` ended up denied on the paid plans while the free plan names
+    it.
+
+    Currently failing on purpose: it documents a real gap in the data.
+    """
+    known = {member.value for member in Feature}
+    missing = {
+        p["code"]: sorted(known - set(p["features"]))
+        for p in plans
+        if p["is_active"] and known - set(p["features"])
+    }
+    assert not missing, f"plans with undefined features: {missing}"

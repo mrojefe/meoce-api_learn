@@ -90,7 +90,7 @@ def close_pool() -> None:
         _pool.close()
         _pool = None
 
-def query(sql: str, params: tuple = ()) -> list[dict]:
+def query(sql: str, params: tuple = (), nothing_return:bool=False) -> list[dict]:
     """Runs a SELECT and returns every row.
 
     The connection is borrowed from the pool and given back when the `with`
@@ -116,6 +116,9 @@ def query(sql: str, params: tuple = ()) -> list[dict]:
     with get_pool().connection() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         
+        if nothing_return :
+            return None
+
         return cur.fetchall()        
 
 def direct_query(sql: str, params: tuple | None = None) -> list[dict]:

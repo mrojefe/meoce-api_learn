@@ -49,6 +49,7 @@ class ErrorCode(StrEnum):
     # credential was wrong. REVOKED and TOKEN_EXPIRED belong to JWT (module 10)
     # and are declared here so the vocabulary exists in one place.
     UNAUTHORIZED = "unauthorized"
+    FORBIDDEN = "forbidden"
     TOKEN_REVOKED = "token_revoked"
     TOKEN_EXPIRED = "token_expired"
     INVALID_TOKEN = "invalid_token"
@@ -88,8 +89,6 @@ class ApiError(Exception):
         self.message = message
         self.status = status
         super().__init__(message)
-
-
 
 
 class NotFoundError(ApiError):
@@ -161,6 +160,29 @@ class UnauthorizedError(ApiError):
         super().__init__(code,message,status)
 
 
+class ForbiddenError(ApiError):
+    """The caller is known, and still may not. Always 403.
+
+    The counterpart to UnauthorizedError, and the distinction is the whole
+    point: 401 means "I do not know who you are", so a valid credential may
+    change the answer. 403 means "I know exactly who you are, and the answer is
+    still no" — retrying with the same identity changes nothing.
+
+    This is what a plan limit raises. The user is authenticated; their
+    subscription simply does not include the feature.
+
+    Args:
+        message (str): What is not permitted. Safe to be specific — the caller
+            is identified, so naming the missing feature helps rather than
+            leaks.
+
+    Examples:
+        >>> raise ForbiddenError("Your plan does not include pro_chart_types")
+    """
+
+    def __init__(self, message: str, code: ErrorCode = ErrorCode.FORBIDDEN,
+                 status: ErrorStatus = ErrorStatus.FORBIDDEN):
+        super().__init__(code, message, status)
 
 
 def _error_response(message, code: ErrorCode, status: ErrorStatus, details=None) -> JSONResponse:

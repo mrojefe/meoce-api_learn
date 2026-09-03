@@ -23,3 +23,4 @@ with only good consequences is marketing).
 | [0006](0006-no-default-exchange.md) | No default exchange: ambiguity is a 409, never a guess | 2026-08-26 | accepted |
 | [0007](0007-routes-stay-sync.md) | Routes stay `def`, not `async def` | 2026-08-28 | accepted |
 | [0008](0008-api-key-for-machines.md) | API key for machines, JWT for people | 2026-08-28 | accepted |
+| [0009](0009-auth-moves-to-the-api.md) | Authentication moves into the API | 2026-09-02 | accepted, not yet implemented |

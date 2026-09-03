@@ -1,0 +1,47 @@
+-- Durcissement (propreté) : retirer les droits d'ÉCRITURE de anon/authenticated sur
+-- `instruments`.
+--
+-- Constat vérifié en base :
+--   SELECT table_name, grantee, privilege_type FROM information_schema.role_table_grants
+--   WHERE table_name='instruments' AND grantee IN ('anon','authenticated');
+-- → anon et authenticated détiennent INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES,
+--   TRIGGER en plus de SELECT (grants larges hérités du GRANT PostgREST).
+--
+-- Ces écritures sont aujourd'hui INERTES : la RLS est active sur `instruments` et sa
+-- seule policy est `read_all` avec cmd=SELECT (vérifié dans pg_policies : cmd=SELECT,
+-- qual=true, with_check=NULL). Aucune policy n'autorisant INSERT/UPDATE/DELETE, la RLS
+-- refuse déjà toute écriture. Mais le grant reste SALE : il ne tient que par la RLS, et
+-- la moindre policy `FOR ALL` ajoutée un jour par mégarde rendrait la table inscriptible
+-- par n'importe quel visiteur. REVOKE ALL ferme la porte au niveau du privilège.
+--
+-- Même traitement que 20260716070000_revoke_all_moat_anon_writes.sql, qui avait nettoyé
+-- 13 tables marché — `instruments` n'était PAS dans cette liste.
+--
+-- ⚠️ La LECTURE est volontairement PRÉSERVÉE : ce fichier ne fait pas REVOKE ALL puis
+-- re-GRANT, il retire chirurgicalement les seules écritures. `instruments` doit rester
+-- lisible par anon (SET ROLE anon; SELECT count(*) FROM instruments; → 372) : la fermeture
+-- du moat n'a jamais visé cette table (elle ne contient que le référentiel des titres :
+-- id, symbole, nom — aucune donnée de marché). La fermer casserait des lectures publiques
+-- légitimes.
+--
+-- Sûr : aucun code n'écrit `instruments` via le client anon/authenticated (les workers et
+-- l'API écrivent en service_role, qui est BYPASSRLS et n'est pas affecté par ce REVOKE).
+-- Idempotent : REVOKE est un no-op si le droit est déjà retiré. Aucun DML.
+
+-- Forme REVOKE ALL puis re-GRANT SELECT, et NON une liste explicite de privilèges.
+-- Raison (revue) : une liste explicite laisse passer MAINTAIN, privilège introduit en
+-- PG 17 (le serveur est en 17.6) et INVISIBLE dans information_schema.role_table_grants
+-- car non standard SQL — d'où son absence du constat initial. Vérifié : après un REVOKE
+-- listant INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER, relacl valait encore
+-- `anon=rm` et has_table_privilege('anon','instruments','MAINTAIN') = true. MAINTAIN
+-- autorise VACUUM FULL / CLUSTER / REINDEX → verrou ACCESS EXCLUSIVE = déni de service.
+-- REVOKE ALL ne laisse aucun résidu et reste correct si PostgreSQL ajoute d'autres
+-- privilèges à l'avenir.
+REVOKE ALL ON public.instruments FROM anon, authenticated;
+
+-- La LECTURE est immédiatement rendue : `instruments` doit rester lisible par anon
+-- (référentiel des titres : id/symbole/nom, aucune donnée de marché, jamais visé par la
+-- fermeture du moat). Vérifié en dry-run : SET ROLE anon; SELECT count(*) → 372, et
+-- relacl retombe à `r` seul. Le RPC get_market_snapshot_v2 (SECURITY DEFINER) reste
+-- opérationnel sous anon (testé : 47 lignes).
+GRANT SELECT ON public.instruments TO anon, authenticated;
