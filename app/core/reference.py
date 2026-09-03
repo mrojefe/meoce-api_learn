@@ -130,6 +130,28 @@ class AllowedCurrencieCode(ReferenceStrEnum):
 
 
 @unique
+class FlagColor(ReferenceStrEnum):
+    """The colours a user may flag an instrument with, mirroring the
+    `flag_colors` table.
+
+    `user_instrument_flags.flag_color` IS a real foreign key —
+    `FOREIGN KEY (flag_color) REFERENCES flag_colors(id) ON UPDATE CASCADE` —
+    checked directly against the running database rather than assumed from an
+    old migration file. Same reasoning as `AllowedSector`: a closed set that
+    rarely changes lives in code, and `tests/test_reference_data.py` is what
+    catches the day this list and the table disagree.
+    """
+
+    RED = "red"
+    ORANGE = "orange"
+    YELLOW = "yellow"
+    GREEN = "green"
+    BLUE = "blue"
+    PURPLE = "purple"
+    PINK = "pink"
+
+
+@unique
 class AllowedSort(ReferenceStrEnum):
     """The columns a caller may sort the instrument list by.
 
@@ -252,7 +274,8 @@ class Feature(ReferenceStrEnum):
 
 @lru_cache
 def get_enum(countries : bool = False, sectors : bool = False,
-            symbols : bool = False, type_ : bool= False,  ) -> dict[str,Any]:
+            symbols : bool = False, type_ : bool= False,
+            flag_colors : bool = False,  ) -> dict[str,Any]:
     """Reads the reference values the API validates against, from the database.
 
     The lists of sectors, countries and instrument types are facts owned by the
@@ -277,6 +300,8 @@ def get_enum(countries : bool = False, sectors : bool = False,
         sectors (bool): Include the `sectors` table.
         symbols (bool): Include every symbol in `instruments`.
         type_ (bool): Include `instrument_types`, returned under the key "types".
+        flag_colors (bool): Include `flag_colors` — its ids ("red", "orange",
+            ...), not the "name" column every other table here has.
 
     Returns:
         dict[str, list[str]]: One key per requested table, each holding its
@@ -288,8 +313,8 @@ def get_enum(countries : bool = False, sectors : bool = False,
     """
 
 
-    bools = [countries,sectors,symbols,type_]
-    tables = ["countries", "sectors", "symbols", "instrument_types" ]
+    bools = [countries,sectors,symbols,type_,flag_colors]
+    tables = ["countries", "sectors", "symbols", "instrument_types", "flag_colors" ]
     selected_tables = [table for table, keep in zip(tables, bools) if keep]
 
     rows = {}
@@ -302,12 +327,17 @@ def get_enum(countries : bool = False, sectors : bool = False,
                 resultat_query=[rq["symbol"] for rq in resultat_query]
             
             case "instrument_types" :
-                sql = """ SELECT code FROM instrument_types """  
+                sql = """ SELECT code FROM instrument_types """
                 resultat_query = direct_query(sql)
                 resultat_query=[rq["code"] for rq in resultat_query]
                 table="types"
-            
-            case _ : 
+
+            case "flag_colors" :
+                sql = """ SELECT id FROM flag_colors ORDER BY sort_order """
+                resultat_query = direct_query(sql)
+                resultat_query=[rq["id"] for rq in resultat_query]
+
+            case _ :
                 sql = f"""SELECT name FROM {table} """
                 resultat_query = direct_query(sql)
                 resultat_query=[rq["name"]for rq in resultat_query] 

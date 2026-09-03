@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import health, instruments, watchlists
+from app.api.v1 import flags, health, instruments, watchlists
 
 router =  APIRouter(prefix="/api/v1")
 
@@ -10,4 +10,5 @@ router =  APIRouter(prefix="/api/v1")
 router.include_router(instruments.router)
 router.include_router(health.router)
 router.include_router(watchlists.router)
+router.include_router(flags.router)
 

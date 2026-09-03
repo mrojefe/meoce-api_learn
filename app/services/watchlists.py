@@ -14,6 +14,7 @@ from uuid import UUID
 from app.core.db.database import query
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError
 from app.schemas.plans import PlanFeatures
+from app.services.instruments import get_instrument_id
 
 
 def list_watchlists(user_id: str) -> tuple[list[dict], int]:
@@ -156,35 +157,6 @@ def _require_ownership(user_id: str, watchlist_id: str) -> None:
     if rows[0]["user_id"] != UUID(user_id):
         raise ForbiddenError("this watchlist doesn't belong to you")
 
-def _require_instrument_id(symbol: str) -> UUID:
-    """Resolves a symbol to the instrument's id, or raises.
-
-    Extracted once `remove_watchlist_symbol` and `add_watchlist_symbol` both
-    needed the exact same lookup. Both routes only ever receive a symbol
-    (what the caller types), but `watchlist_items` stores `instrument_id` (a
-    uuid) — so both must translate one to the other before they can touch
-    that table.
-
-    Args:
-        symbol (str): The instrument's ticker, already normalised by the
-            `Symbol` type in the schema.
-
-    Returns:
-        UUID: The matching instrument's id.
-
-    Raises:
-        NotFoundError: No instrument has this symbol (404).
-    """
-    sql_instrument = "SELECT id FROM instruments WHERE symbol = %s"
-    params_instrument = symbol
-    rows_instrument = query(sql_instrument, (params_instrument,))
-
-    if not rows_instrument:
-        raise NotFoundError(f"no instrument with symbol {symbol!r}")
-
-    return rows_instrument[0]["id"]
-
-
 def delete_watchlist(user_id: str, watchlist_id: str) -> None:
     """Deletes one watchlist, if the caller owns it.
 
@@ -234,7 +206,7 @@ def remove_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> Non
     """
     _require_ownership(user_id, watchlist_id)
 
-    instrument_id = _require_instrument_id(symbol)
+    instrument_id = get_instrument_id(symbol)
 
     sql_remove = """
         DELETE FROM watchlist_items
@@ -275,7 +247,7 @@ def add_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> None:
     """
     _require_ownership(user_id, watchlist_id)
 
-    instrument_id = _require_instrument_id(symbol)
+    instrument_id = get_instrument_id(symbol)
     sort_order_gap = 100
 
     sql_exists = """
@@ -313,8 +285,7 @@ def update_watchlist(
     fields_set: set[str],
     name: str | None,
     description: str | None,
-    is_public: bool | None,
-) -> dict:
+    is_public: bool | None,) -> dict:
     """Updates only the fields the caller actually sent.
 
     `fields_set` is `WatchlistUpdate.model_fields_set` from the route — the
@@ -362,10 +333,9 @@ def update_watchlist(
         return query(sql_unchanged, (params_unchanged,))[0]
 
     columns_to_update = changes.keys()
-    set_clause_parts = []
-    for column in columns_to_update:
-        set_clause_parts.append(f"{column} = %s")
-    set_clause = ", ".join(set_clause_parts)
+    set_clause_parts = [f"{column} = %s" for column in columns_to_update ]
+    set_clause = ", ".join(set_clause_parts) # so for each elment we got 
+
     sql_update = f"""
         UPDATE watchlists
         SET {set_clause}, updated_at = now()

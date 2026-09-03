@@ -11,7 +11,7 @@ They need a reachable database, so they are integration tests, not unit tests.
 
 import pytest
 
-from app.core.reference import AllowedSector, AllowedType, Feature, PlanCode, get_enum
+from app.core.reference import AllowedSector, AllowedType, Feature, FlagColor, PlanCode, get_enum
 
 
 @pytest.fixture(scope="module")
@@ -21,7 +21,7 @@ def reference():
     Returns:
         dict[str, list[str]]: The "types" and "sectors" lists, as stored.
     """
-    return get_enum(sectors=True, type_=True)
+    return get_enum(sectors=True, type_=True, flag_colors=True)
 
 
 def test_types_match_the_database(reference):
@@ -115,3 +115,19 @@ def test_every_active_plan_defines_every_feature(plans):
         if p["is_active"] and known - set(p["features"])
     }
     assert not missing, f"plans with undefined features: {missing}"
+
+
+def test_flag_colors_match_the_database(reference):
+    """Every id in flag_colors is named in FlagColor, and vice versa.
+
+    This is the test that would have caught the mistake made writing
+    `FlagColor` the first time: it was built off an old migration's CHECK
+    constraint, never checked against the running database, and missed two
+    real rows (purple, pink) that a later migration had already added.
+    """
+    in_db = set(reference["flag_colors"])
+    in_code = {member.value for member in FlagColor}
+    assert in_code == in_db, (
+        f"only in the database: {sorted(in_db - in_code)} | "
+        f"only in the code: {sorted(in_code - in_db)}"
+    )

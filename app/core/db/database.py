@@ -121,7 +121,7 @@ def query(sql: str, params: tuple = (), nothing_return:bool=False) -> list[dict]
 
         return cur.fetchall()        
 
-def direct_query(sql: str, params: tuple | None = None) -> list[dict]:
+def direct_query(sql: str, params: tuple | None = None, nothing_return=False) -> list[dict]:
     """Runs one SELECT on its own short-lived connection, outside the pool.
 
     `query()` in app/core/database.py is the normal way to reach the database.
@@ -156,10 +156,14 @@ def direct_query(sql: str, params: tuple | None = None) -> list[dict]:
         row_factory = dict_row, 
     ) 
 
-    with psycopg_connector, psycopg_connector.cursor() as cur: 
-        cur.execute(sql,params)
-        rows =cur.fetchall()
-    
+    with psycopg_connector, psycopg_connector.cursor() as cur:
+        cur.execute(sql, params)
+
+        if nothing_return:
+            return None
+
+        rows = cur.fetchall()
+
     return rows
 
 
