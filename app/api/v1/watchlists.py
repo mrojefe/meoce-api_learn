@@ -6,12 +6,14 @@ to one person, so every route here starts by learning who is calling.
 """
 
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends
 
-from app.core.security.deps import get_current_user_id
+from app.core.security.deps import get_current_entitlements, get_current_user_id
 from app.schemas import watchlists as watchlists_schemas
-from app.schemas.common import Envelope, ErrorEnvelope, envelope_
+from app.schemas.common import Envelope, ErrorEnvelope, Symbol, envelope_
+from app.schemas.plans import PlanFeatures
 from app.services import watchlists as watchlists_services
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
@@ -47,3 +49,108 @@ def list_watchlists(user_id: Annotated[str, Depends(get_current_user_id)]):
     """
     rows, count = watchlists_services.list_watchlists(user_id=user_id)
     return envelope_(data=rows, count=count)
+
+
+@router.post("", status_code=201,
+             response_model=Envelope[watchlists_schemas.Watchlist],
+             responses={x: {"model": ErrorEnvelope} for x in (401, 403)})
+def create_watchlist(
+    payload: watchlists_schemas.WatchlistCreate,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+    entitlements: Annotated[PlanFeatures, Depends(get_current_entitlements)],):
+    """Creates a watchlist for the caller, if their plan still allows one.
+
+    Two dependencies, two different questions: `get_current_user_id` asks *who*,
+    `get_current_entitlements` asks *what may they*. FastAPI resolves both
+    before this function runs, and the second depends on the first — the plan
+    is looked up from the id that came out of the token.
+
+    Note what the body cannot contain: an owner. `WatchlistCreate` has name,
+    description and is_public, and nothing else. The owner comes from the token,
+    so there is no way to express "create this in someone else's account".
+
+    Args:
+        payload (WatchlistCreate): name, optional description, is_public.
+        user_id (str): The caller, from the token.
+        entitlements (PlanFeatures): The caller's plan.
+
+    Returns:
+        dict: {"data": {...}} with 201 Created — the row the database wrote,
+            id included, since the client needs it for every later call.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        ForbiddenError: The plan's watchlist limit is reached (403).
+
+    Examples:
+        POST /api/v1/watchlists  {"name": "BRVM banks"}
+    """
+    row = watchlists_services.create_watchlist(
+        user_id=user_id,
+        name=payload.name,
+        description=payload.description,
+        is_public=payload.is_public,
+        entitlements=entitlements,
+    )
+    return envelope_(data=row)
+
+
+@router.delete("/{watchlist_id}", status_code=204)
+def delete_watchlist(
+    watchlist_id: UUID,
+    user_id: Annotated[str, Depends(get_current_user_id)],):
+    """Deletes one of the caller's watchlists.
+
+    204 No Content on success — a DELETE that worked has nothing left to
+    describe, so there is no `data` to wrap in an envelope and no
+    `response_model` to declare.
+
+    `watchlist_id: UUID` means FastAPI rejects a malformed id with a 422
+    before this function runs, rather than sending a bad value into SQL.
+
+    Args:
+        watchlist_id (UUID): The list to delete.
+        user_id (str): The authenticated caller, from the token.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        NotFoundError: No such watchlist (404).
+        ForbiddenError: The watchlist belongs to someone else (403).
+
+    Examples:
+        DELETE /api/v1/watchlists/5d5ee2a6-75b7-48f8-9e20-68b6ecb62028
+    """
+    watchlists_services.delete_watchlist(user_id, watchlist_id)
+
+
+@router.delete("/{watchlist_id}/items/{symbol}", status_code=204)
+def remove_item(
+    watchlist_id: UUID,
+    symbol: Symbol,
+    user_id: Annotated[str, Depends(get_current_user_id)],
+):
+    """Removes one instrument from one of the caller's watchlists.
+
+    204 whether the symbol was in the list or not — see the service docstring
+    for why: removing something already absent still leaves the world in the
+    state the caller asked for.
+
+    `symbol: Symbol` reuses the same normalising type instruments already use,
+    so `?/watchlists/{id}/items/snts` and `.../SNTS` reach the service as the
+    same value.
+
+    Args:
+        watchlist_id (UUID): The list to remove the item from.
+        symbol (Symbol): The instrument's ticker.
+        user_id (str): The authenticated caller, from the token.
+
+    Raises:
+        UnauthorizedError: No token or an invalid one (401).
+        NotFoundError: No such watchlist, or no instrument with that symbol
+            (404).
+        ForbiddenError: The watchlist belongs to someone else (403).
+
+    Examples:
+        DELETE /api/v1/watchlists/5d5ee2a6-.../items/SNTS
+    """
+    watchlists_services.remove_watchlist_symbol(user_id, watchlist_id, symbol)
