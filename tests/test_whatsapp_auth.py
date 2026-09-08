@@ -17,6 +17,7 @@ from app.core.db.database import query
 from app.core.db.redis import get_redis
 from app.core.errors import ConflictError, RateLimitError
 from app.services.whatsapp_auth import (
+    check_whatsapp_exists,
     check_whatsapp_status,
     start_whatsapp_attach,
     start_whatsapp_signup,
@@ -33,10 +34,12 @@ def fake_request():
     request.client = None
 
     get_redis().delete("whatsapp_code_start:unknown")
+    get_redis().delete("whatsapp_check:unknown")
 
     yield request
 
     get_redis().delete("whatsapp_code_start:unknown")
+    get_redis().delete("whatsapp_check:unknown")
 
 
 def _cleanup(phone: str) -> None:
@@ -275,3 +278,34 @@ def test_status_is_rate_limited_per_code(fake_request):
         check_whatsapp_status(code)
 
     get_redis().delete(f"whatsapp_code_guess:{code}")
+
+
+def test_check_whatsapp_exists_true(fake_request):
+    mock_response = Mock()
+    mock_response.json.return_value = {"numberExists": True, "chatId": "2250767386180@c.us"}
+    mock_response.raise_for_status.return_value = None
+
+    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+        assert check_whatsapp_exists("2250767386180", fake_request) is True
+
+
+def test_check_whatsapp_exists_false(fake_request):
+    mock_response = Mock()
+    mock_response.json.return_value = {"numberExists": False, "chatId": None}
+    mock_response.raise_for_status.return_value = None
+
+    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+        assert check_whatsapp_exists("0000000000", fake_request) is False
+
+
+def test_check_whatsapp_exists_is_rate_limited(fake_request):
+    mock_response = Mock()
+    mock_response.json.return_value = {"numberExists": True, "chatId": "x@c.us"}
+    mock_response.raise_for_status.return_value = None
+
+    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+        for _ in range(20):
+            check_whatsapp_exists("2250767386180", fake_request)
+
+        with pytest.raises(RateLimitError):
+            check_whatsapp_exists("2250767386180", fake_request)

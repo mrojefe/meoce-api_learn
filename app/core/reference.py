@@ -283,6 +283,7 @@ class StartRateLimitKeyTypes(StrEnum) :
     GOOGLE_SIGN_IN = "google_sign_in"
     WHATSAPP_CODE_START = "whatsapp_code_start"
     WHATSAPP_CODE_GUESS = "whatsapp_code_guess"
+    WHATSAPP_CHECK = "whatsapp_check"
 
 def valide_rate_limite_key(type:StartRateLimitKeyTypes,snd_part:str):
     return f"{type.value}:{snd_part}"

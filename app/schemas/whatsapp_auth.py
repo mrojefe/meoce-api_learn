@@ -40,3 +40,14 @@ class WhatsappStatusResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
     token_type: str | None = None
+
+
+class CheckWhatsappResponse(BaseModel):
+    """The body returned by GET /auth/whatsapp/check.
+
+    A yes/no answer only — this never touches the code flow, Redis, or the
+    database. It exists so a client can validate a phone number is real
+    (has WhatsApp at all) before offering the signup/attach flow for it.
+    """
+
+    exists: bool

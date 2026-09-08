@@ -94,6 +94,14 @@ WHATSAPP_CODE_START_WINDOW_SECONDS = 300
 WHATSAPP_CODE_GUESS_MAX_ATTEMPTS = 20
 WHATSAPP_CODE_GUESS_WINDOW_SECONDS = 600
 
+# check_whatsapp_exists's own limit: a plain existence check, no code
+# involved, so it doesn't need the tight guessing-focused numbers above —
+# 20/60s is generous enough for a real user checking a typo'd number a few
+# times, while still capping one IP from using this as a bulk phone-number
+# scanner against WAHA.
+WHATSAPP_CHECK_MAX_ATTEMPTS = 20
+WHATSAPP_CHECK_WINDOW_SECONDS = 60
+
 # The message body a user is asked to send: "MEOCE-123456", "MEOCE 123456",
 # or "meoce123456" all match — case-insensitive, hyphen/space/nothing
 # between the word and the digits, since WhatsApp's own auto-formatting
@@ -135,23 +143,23 @@ def start_whatsapp_signup(request: Request) -> dict:
 def start_whatsapp_attach(user_id: str, request: Request) -> dict:
     """Generates an attach code for the already-authenticated caller.
 
-    Same shape as `start_whatsapp_signup`, but the stored payload also
-    carries `user_id`, which is what `check_whatsapp_status` uses to tell
-    the two flows apart once the code is consumed (see the module
-    docstring's linking policy). The route (`POST
-    /users/me/whatsapp/attach`) injects `user_id` via `get_current_user_id`
-    — this function just takes it as a plain argument, so it stays
-    testable without a real token.
+        Same shape as `start_whatsapp_signup`, but the stored payload also
+        carries `user_id`, which is what `check_whatsapp_status` uses to tell
+        the two flows apart once the code is consumed (see the module
+        docstring's linking policy). The route (`POST
+        /users/me/whatsapp/attach`) injects `user_id` via `get_current_user_id`
+        — this function just takes it as a plain argument, so it stays
+        testable without a real token.
 
-    Args:
-        user_id (str): The authenticated caller's account id.
-        request (Request): Used to build the rate-limit key.
+        Args:
+            user_id (str): The authenticated caller's account id.
+            request (Request): Used to build the rate-limit key.
 
-    Returns:
-        dict: code, whatsapp_number, expires_in_seconds.
+        Returns:
+            dict: code, whatsapp_number, expires_in_seconds.
 
-    Raises:
-        RateLimitError: Too many codes started from this IP (429).
+        Raises:
+            RateLimitError: Too many codes started from this IP (429).
     """
     check_rate_limit(
         valide_rate_limite_key(StartRateLimitKeyTypes.WHATSAPP_CODE_START, user_ip(request)),
@@ -334,6 +342,52 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
     )
 
     return {"status": "confirmed"}
+
+
+def check_whatsapp_exists(phone: str, request: Request) -> bool:
+    """Whether a phone number has WhatsApp at all — no code involved.
+
+    Same job as the real app's `check-whatsapp` route: a lightweight,
+    read-only check used to validate a number *before* asking the user to
+    go through the code flow — e.g. a Google-signed-up user typing a phone
+    number into a "add WhatsApp" field, so the app can say "that number
+    isn't on WhatsApp" immediately instead of generating a code that could
+    never be confirmed.
+
+    Public on purpose, unlike `_waha_check_exists`: this one is meant to be
+    called directly from a route, for a phone the caller is *asking about*,
+    not for resolving MEOCE's own number internally.
+
+    Rate-limited by IP: this makes a real outbound call to WAHA for every
+    phone tried, which costs WAHA a request and could otherwise be used to
+    enumerate which numbers exist on WhatsApp at scale.
+
+    Args:
+        phone (str): E.164 phone number, digits only, no leading `+`.
+        request (Request): Used to build the rate-limit key.
+
+    Returns:
+        bool: True if WAHA reports this number exists on WhatsApp.
+
+    Raises:
+        RateLimitError: Too many checks from this IP (429).
+    """
+    check_rate_limit(
+        valide_rate_limite_key(StartRateLimitKeyTypes.WHATSAPP_CHECK, user_ip(request)),
+        WHATSAPP_CHECK_MAX_ATTEMPTS, WHATSAPP_CHECK_WINDOW_SECONDS,
+        "too many WhatsApp checks, try again later",
+    )
+
+    settings = get_settings()
+    response = httpx.get(
+        f"{settings.waha_api_url}/api/contacts/check-exists",
+        params={"phone": phone, "session": settings.waha_session},
+        headers={"X-Api-Key": settings.waha_api_key.get_secret_value()},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+
+    return response.json()["numberExists"]
 
 
 def _waha_check_exists(phone: str) -> str:

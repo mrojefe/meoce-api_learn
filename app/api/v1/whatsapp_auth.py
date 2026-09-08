@@ -64,3 +64,27 @@ def whatsapp_status(code: str):
         GET /api/v1/auth/whatsapp/status?code=123456
     """
     return envelope_(data=services.check_whatsapp_status(code))
+
+
+@router.get("/check", response_model=Envelope[schemas.CheckWhatsappResponse],
+            responses={429: {"model": ErrorEnvelope}})
+def check_whatsapp_exists(phone: str, request: Request):
+    """Whether a phone number has WhatsApp at all — no code, no signup.
+
+    A lightweight pre-check, e.g. before offering the signup/attach flow
+    for a number a caller just typed in.
+
+    Args:
+        phone (str): E.164 phone number, digits only, no leading `+`.
+        request (Request): Used to build the rate-limit key.
+
+    Returns:
+        dict: {"data": {"exists": true|false}}.
+
+    Raises:
+        RateLimitError: Too many checks from this IP (429).
+
+    Examples:
+        GET /api/v1/auth/whatsapp/check?phone=2250767386180
+    """
+    return envelope_(data={"exists": services.check_whatsapp_exists(phone, request)})
