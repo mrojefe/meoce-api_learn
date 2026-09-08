@@ -55,6 +55,7 @@ class ErrorCode(StrEnum):
     INVALID_TOKEN = "invalid_token"
     ACCOUNT_SUPENDED="account_suspended"
     ACCOUNT_BANNED="account_banned"
+    RATE_LIMIT ="rate_limit_exceeded"
 
 
 logger = logging.getLogger("meoce.api")
@@ -182,6 +183,18 @@ class ForbiddenError(ApiError):
 
     def __init__(self, message: str, code: ErrorCode = ErrorCode.FORBIDDEN,
                  status: ErrorStatus = ErrorStatus.FORBIDDEN):
+        super().__init__(code, message, status)
+
+class PasswordPolicyError(ApiError):
+
+    def __init__(self, message: str, code: ErrorCode = ErrorCode.VALIDATION,
+                status: ErrorStatus = ErrorStatus.UNPROCESSABLE_ENTITY):
+        super().__init__(code, message, status)
+
+class RateLimitError(ApiError):
+
+    def __init__(self, message: str, code: ErrorCode = ErrorCode.RATE_LIMIT,
+                status: ErrorStatus = ErrorStatus.TOO_MANY_REQUESTS):
         super().__init__(code, message, status)
 
 

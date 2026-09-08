@@ -27,21 +27,21 @@ from pydantic import BaseModel, Field
 class PlanFeatures(BaseModel):
     """Everything a plan grants, parsed from `subscription_plans.features`.
 
-    Two kinds of field, and the difference matters when reading them:
+        Two kinds of field, and the difference matters when reading them:
 
-    * **switches** — a bool. Default `False`: a feature nobody granted is not
-      granted. Silence denies.
-    * **limits** — an int, or `None` meaning unlimited. Default `None`.
+        * **switches** — a bool. Default `False`: a feature nobody granted is not
+        granted. Silence denies.
+        * **limits** — an int, or `None` meaning unlimited. Default `None`.
 
-    Note the asymmetry, because it is a trap: for a switch, "unspecified" means
-    *no*; for a limit, it means *unlimited*. The same silence is restrictive in
-    one case and permissive in the other. That is exactly how `multi_layout`,
-    defined only on the free plan, ended up denied on the paid ones — and why
-    every plan should state every key rather than relying on a default.
+        Note the asymmetry, because it is a trap: for a switch, "unspecified" means
+        *no*; for a limit, it means *unlimited*. The same silence is restrictive in
+        one case and permissive in the other. That is exactly how `multi_layout`,
+        defined only on the free plan, ended up denied on the paid ones — and why
+        every plan should state every key rather than relying on a default.
 
-    Every active plan now states every key explicitly, enforced by
-    `tests/test_reference_data.py`. The defaults above are a safety net for a
-    plan created later and left incomplete, not something to rely on.
+        Every active plan now states every key explicitly, enforced by
+        `tests/test_reference_data.py`. The defaults above are a safety net for a
+        plan created later and left incomplete, not something to rely on.
     """
 
     model_config = {"extra": "forbid"}

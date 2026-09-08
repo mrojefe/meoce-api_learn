@@ -3,10 +3,10 @@
 Success and failure each have exactly one shape here, so a client writes one
 unwrapping function instead of one per endpoint.
 """
-
+import re
 from typing import Annotated, Any, Generic, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
 
 Symbol = Annotated[
     str,
@@ -114,3 +114,27 @@ class ErrorEnvelope(BaseModel):
     whatever endpoint it called.
     """
     error: ErrorBody
+
+
+
+
+# 1. Define the strict validation function
+def _validate_hard_password(v: str) -> str:
+    # don't change the way it's import or go back in circular import 
+    from app.core.errors import PasswordPolicyError
+
+    # order matter!
+    if len(v) < 12:
+        raise PasswordPolicyError("The password must contain at least 12 characters.")
+    if not re.search(r"[A-Z]", v):
+        raise PasswordPolicyError("The password must contain at least one uppercase letter (A-Z).")
+    if not re.search(r"[a-z]", v):
+        raise PasswordPolicyError("The password must contain at least one lowercase letter (a-z).")
+    if not re.search(r"[0-9]", v):
+        raise PasswordPolicyError("The password must contain at least one digit (0-9).")
+    if not re.search(r'[!@#$%^&*(),.?":{}|<>]', v):
+        raise PasswordPolicyError("The password must contain at least one special character.")
+    return v
+
+# 2. Create a reusable type for your models
+HardPassword = Annotated[str, AfterValidator(_validate_hard_password)]

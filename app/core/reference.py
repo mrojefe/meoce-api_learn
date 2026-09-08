@@ -270,6 +270,22 @@ class Feature(ReferenceStrEnum):
     MAX_VIRTUAL_PORTFOLIOS = "max_virtual_portfolios"
     MAX_WATCHLISTS = "max_watchlists"
 
+@unique
+class StartRateLimitKeyTypes(StrEnum) :
+    # No ReferenceStrEnum ,the case matter
+    LOGIN = "login"
+    SIGNUP = "signup"
+    REFRESH = "refresh"
+    RESEND_VERIFICATION = "resend_verification"
+    VERIFICATION = "email_verify"
+    REVOKED_JTI = "revoked_jti"
+    PASSWORD_RESET = "password_reset"
+    GOOGLE_SIGN_IN = "google_sign_in"
+    WHATSAPP_CODE_START = "whatsapp_code_start"
+    WHATSAPP_CODE_GUESS = "whatsapp_code_guess"
+
+def valide_rate_limite_key(type:StartRateLimitKeyTypes,snd_part:str):
+    return f"{type.value}:{snd_part}"
 
 
 def get_enum(countries : bool = False, sectors : bool = False,

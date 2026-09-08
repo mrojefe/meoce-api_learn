@@ -11,36 +11,37 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Every value the application reads from its environment.
 
-    Values are resolved in this order: a real environment variable, then the
-    .env file, then the default declared here. Fields with no default are
-    required — the application refuses to start without them, naming the
-    missing variable, instead of failing on the first request that needs it.
+        Values are resolved in this order: a real environment variable, then the
+        .env file, then the default declared here. Fields with no default are
+        required — the application refuses to start without them, naming the
+        missing variable, instead of failing on the first request that needs it.
 
-    `env` is deliberately required: with a default of "dev", a missing
-    MEOCE_ENV in production would make the app believe it is in development
-    and publish /docs to the world.
+        `env` is deliberately required: with a default of "dev", a missing
+        MEOCE_ENV in production would make the app believe it is in development
+        and publish /docs to the world.
 
-    Attributes:
-        env (str): "dev" or "prod". Gates /docs and /redoc in main.py.
-        api_version (str): Reported by /health and shown in /docs.
-        postgres_host (str): Database host. 127.0.0.1 locally, through the
-            port published by Coolify on the staging service.
-        postgres_port (int): Converted from text by the annotation.
-        postgres_db (str): Database name.
-        postgres_user (str): Database user. The API connects as one user
-            whoever the human caller is.
-        postgres_password (SecretStr): Masked in logs and tracebacks. Read it
-            with .get_secret_value(), which happens only in conninfo().
+        Attributes:
+            env (str): "dev" or "prod". Gates /docs and /redoc in main.py.
+            api_version (str): Reported by /health and shown in /docs.
+            postgres_host (str): Database host. 127.0.0.1 locally, through the
+                port published by Coolify on the staging service.
+            postgres_port (int): Converted from text by the annotation.
+            postgres_db (str): Database name.
+            postgres_user (str): Database user. The API connects as one user
+                whoever the human caller is.
+            postgres_password (SecretStr): Masked in logs and tracebacks. Read it
+                with .get_secret_value(), which happens only in conninfo().
 
-    Examples:
-        >>> get_settings().postgres_port
-        5433
+        Examples:
+            >>> get_settings().postgres_port
+            5433
     """
     model_config = SettingsConfigDict(
         env_file = ".env", 
         env_file_encoding = "utf-8",
         extra="ignore"
         )
+        
     env : Annotated[str, Field(alias="MEOCE_ENV" )] 
     jwt_secret:Annotated[SecretStr, Field(alias="JWT_SECRET")]
     api_key : Annotated[SecretStr, Field(alias="API_KEY")]
@@ -51,7 +52,28 @@ class Settings(BaseSettings):
     postgres_db : Annotated[str, Field(alias="POSTGRES_DB" )]
     postgres_user : Annotated[str, Field(alias="POSTGRES_USER" )]
     postgres_password : Annotated[SecretStr, Field(alias="POSTGRES_PASSWORD" )]
-    
+
+    redis_host : Annotated[str, Field(alias="REDIS_HOST")]
+    redis_port : Annotated[int, Field(alias="REDIS_PORT")]
+    redis_username : Annotated[str, Field(alias="REDIS_USERNAME")]
+    redis_password : Annotated[SecretStr, Field(alias="REDIS_PASSWORD")]
+
+    smtp_from : Annotated[str, Field(alias="SMTP_FROM")]
+    smtp_host : Annotated[str, Field(alias="SMTP_HOST")]
+    smtp_port : Annotated[int, Field(alias="SMTP_PORT")]
+    smtp_secure : Annotated[bool, Field(alias="SMTP_SECURE")]
+    smtp_user : Annotated[str, Field(alias="SMTP_USER")]
+    smtp_password : Annotated[SecretStr, Field(alias="SMTP_PASS")]
+
+    api_base_url : Annotated[str, Field(alias="API_BASE_URL")]
+
+    google_oauth_client_id : Annotated[str, Field(alias="GOOGLE_OAUTH_CLIENT_ID")]
+
+    waha_api_url : Annotated[str, Field(alias="WAHA_API_URL")]
+    waha_api_key : Annotated[SecretStr, Field(alias="WAHA_API_KEY")]
+    waha_session : Annotated[str, Field(alias="WAHA_SESSION")] = "default"
+    waha_meoce_number : Annotated[str, Field(alias="WAHA_MEOCE_NUMBER")]
+
 
 @lru_cache    
 def get_settings() -> Settings:
@@ -73,4 +95,4 @@ def get_settings() -> Settings:
         >>> get_settings() is get_settings()
         True
     """
-    return Settings()
+    return Settings() # the above is just the shape/validation  so that is the setting now

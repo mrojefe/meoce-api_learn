@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
 from app.core.db.database import close_pool, open_pool
+from app.core.db.redis import close_redis, open_redis
 from app.core.errors import register_error_handler
 
 settings = get_settings()
@@ -25,8 +26,10 @@ async def lifespan(app: FastAPI):
             signature FastAPI expects, unused here.
     """
     open_pool()          # before the first request
+    open_redis()
     yield                # the app runs
     close_pool()         # after the last one
+    close_redis()
 
 
 app = FastAPI(

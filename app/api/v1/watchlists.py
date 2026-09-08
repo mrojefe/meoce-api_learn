@@ -11,15 +11,15 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.core.security.deps import get_current_entitlements, get_current_user_id
-from app.schemas import watchlists as watchlists_schemas
+from app.schemas import plans as plans_schemas
+from app.schemas import watchlists as schemas
 from app.schemas.common import Envelope, ErrorEnvelope, Symbol, envelope_
-from app.schemas.plans import PlanFeatures
-from app.services import watchlists as watchlists_services
+from app.services import watchlists as services
 
 router = APIRouter(prefix="/watchlists", tags=["watchlists"])
 
 
-@router.get("", response_model=Envelope[list[watchlists_schemas.Watchlist]],
+@router.get("", response_model=Envelope[list[schemas.Watchlist]],
             responses={401: {"model": ErrorEnvelope}})
 def list_watchlists(user_id: Annotated[str, Depends(get_current_user_id)]):
     """Returns the watchlists belonging to the caller.
@@ -47,12 +47,12 @@ def list_watchlists(user_id: Annotated[str, Depends(get_current_user_id)]):
     Examples:
         GET /api/v1/watchlists   with  Authorization: Bearer <token>
     """
-    rows, count = watchlists_services.list_watchlists(user_id=user_id)
+    rows, count = services.list_watchlists(user_id=user_id)
     return envelope_(data=rows, count=count)
 
 
 @router.get("/{watchlist_id}/items",
-            response_model=Envelope[list[watchlists_schemas.WatchlistItem]],
+            response_model=Envelope[list[schemas.WatchlistItem]],
             responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404)})
 def list_watchlist_items(
     watchlist_id: UUID,
@@ -81,19 +81,19 @@ def list_watchlist_items(
     Examples:
         GET /api/v1/watchlists/5d5ee2a6-75b7-48f8-9e20-68b6ecb62028/items
     """
-    rows, count = watchlists_services.list_watchlist_items(
+    rows, count = services.list_watchlist_items(
         user_id=user_id, watchlist_id=watchlist_id,
     )
     return envelope_(data=rows, count=count)
 
 
 @router.post("", status_code=201,
-             response_model=Envelope[watchlists_schemas.Watchlist],
+             response_model=Envelope[schemas.Watchlist],
              responses={x: {"model": ErrorEnvelope} for x in (401, 403)})
 def create_watchlist(
-    payload: watchlists_schemas.WatchlistCreate,
+    payload: schemas.WatchlistCreate,
     user_id: Annotated[str, Depends(get_current_user_id)],
-    entitlements: Annotated[PlanFeatures, Depends(get_current_entitlements)],):
+    entitlements: Annotated[plans_schemas.PlanFeatures, Depends(get_current_entitlements)],):
     """Creates a watchlist for the caller, if their plan still allows one.
 
     Two dependencies, two different questions: `get_current_user_id` asks *who*,
@@ -121,7 +121,7 @@ def create_watchlist(
     Examples:
         POST /api/v1/watchlists  {"name": "BRVM banks"}
     """
-    row = watchlists_services.create_watchlist(
+    row = services.create_watchlist(
         user_id=user_id,
         name=payload.name,
         description=payload.description,
@@ -135,7 +135,7 @@ def create_watchlist(
              responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404, 409)})
 def add_item(
     watchlist_id: UUID,
-    payload: watchlists_schemas.WatchlistItemAdd,
+    payload: schemas.WatchlistItemAdd,
     user_id: Annotated[str, Depends(get_current_user_id)]):
     """Adds one instrument to one of the caller's watchlists.
 
@@ -162,15 +162,15 @@ def add_item(
     Examples:
         POST /api/v1/watchlists/5d5ee2a6-.../items  {"symbol": "SNTS"}
     """
-    watchlists_services.add_watchlist_symbol(user_id, watchlist_id, payload.symbol)
+    services.add_watchlist_symbol(user_id, watchlist_id, payload.symbol)
 
 
 @router.patch("/{watchlist_id}",
-              response_model=Envelope[watchlists_schemas.Watchlist],
+              response_model=Envelope[schemas.Watchlist],
               responses={x: {"model": ErrorEnvelope} for x in (401, 403, 404)})
 def update_watchlist(
     watchlist_id: UUID,
-    payload: watchlists_schemas.WatchlistUpdate,
+    payload: schemas.WatchlistUpdate,
     user_id: Annotated[str, Depends(get_current_user_id)]):
     """Changes only the fields sent, on one of the caller's watchlists.
 
@@ -197,7 +197,7 @@ def update_watchlist(
     Examples:
         PATCH /api/v1/watchlists/5d5ee2a6-...  {"name": "BRVM tech"}
     """
-    row = watchlists_services.update_watchlist(
+    row = services.update_watchlist(
         user_id=user_id,
         watchlist_id=watchlist_id,
         fields_set=payload.model_fields_set,
@@ -233,7 +233,7 @@ def delete_watchlist(
     Examples:
         DELETE /api/v1/watchlists/5d5ee2a6-75b7-48f8-9e20-68b6ecb62028
     """
-    watchlists_services.delete_watchlist(user_id, watchlist_id)
+    services.delete_watchlist(user_id, watchlist_id)
 
 
 @router.delete("/{watchlist_id}/items/{symbol}", status_code=204)
@@ -265,5 +265,5 @@ def remove_item(
     Examples:
         DELETE /api/v1/watchlists/5d5ee2a6-.../items/SNTS
     """
-    watchlists_services.remove_watchlist_symbol(user_id, watchlist_id, symbol)
+    services.remove_watchlist_symbol(user_id, watchlist_id, symbol)
 

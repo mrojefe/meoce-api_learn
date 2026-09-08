@@ -100,6 +100,39 @@ def _build_filters(type_ : str | None , sector : str | None) -> tuple[str, tuple
     return where_type,filters_types
 
 
+def get_instrument_id(symbol: str) -> str:
+    """Resolves a symbol to its instrument id, or raises.
+
+    Shared by any feature that stores `instrument_id` but only ever receives
+    a symbol from the caller — watchlist items and instrument flags today.
+    Lives here rather than duplicated in each service, because the lookup is
+    about instruments, not about watchlists or flags.
+
+    Same open issue as `get_by_symbol` (exercise E-20): a symbol existing on
+    two exchanges is not disambiguated here — the first match wins silently.
+    Not fixed in this pass; noted so it isn't forgotten.
+
+    Args:
+        symbol (str): The instrument's ticker, already normalised by the
+            `Symbol` type in the schema.
+
+    Returns:
+        str: The matching instrument's id (a uuid).
+
+    Raises:
+        NotFoundError: No instrument has this symbol (404).
+    """
+    sql_instrument = "SELECT id FROM instruments WHERE symbol = %s"
+    params_instrument = symbol
+    rows_instrument = query(sql_instrument, (params_instrument,))
+
+    if not rows_instrument:
+        raise NotFoundError(f"no instrument with symbol {symbol!r}")
+
+    return rows_instrument[0]["id"]
+
+
+
 def list_instruments(type_ : str | None = None, sector: str | None = None,
                      limit : int | None = 20, offset: int = 0,
                      sort: AllowedSort | None = None) -> tuple[list[dict], int]:
@@ -233,38 +266,6 @@ def get_by_symbol(symbol: str, exchange: str | None = None) -> dict:
         )
         
     return rows[0] # response_model in route gey_by_symbol  is waiting for Envelope[Instrument]
-
-
-def get_instrument_id(symbol: str) -> str:
-    """Resolves a symbol to its instrument id, or raises.
-
-    Shared by any feature that stores `instrument_id` but only ever receives
-    a symbol from the caller — watchlist items and instrument flags today.
-    Lives here rather than duplicated in each service, because the lookup is
-    about instruments, not about watchlists or flags.
-
-    Same open issue as `get_by_symbol` (exercise E-20): a symbol existing on
-    two exchanges is not disambiguated here — the first match wins silently.
-    Not fixed in this pass; noted so it isn't forgotten.
-
-    Args:
-        symbol (str): The instrument's ticker, already normalised by the
-            `Symbol` type in the schema.
-
-    Returns:
-        str: The matching instrument's id (a uuid).
-
-    Raises:
-        NotFoundError: No instrument has this symbol (404).
-    """
-    sql_instrument = "SELECT id FROM instruments WHERE symbol = %s"
-    params_instrument = symbol
-    rows_instrument = query(sql_instrument, (params_instrument,))
-
-    if not rows_instrument:
-        raise NotFoundError(f"no instrument with symbol {symbol!r}")
-
-    return rows_instrument[0]["id"]
 
 
 

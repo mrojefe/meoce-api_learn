@@ -61,14 +61,28 @@ def test_value_is_exactly_what_the_database_holds():
 
 @pytest.fixture(scope="module")
 def plans():
-    """Reads the subscription plans once for the whole module.
+    """Reads the plans once for the whole module, features reassembled from
+    `plan_features` into the same {code, features, is_active} shape the tests
+    below already expect — `plans.features` (the JSONB blob) doesn't exist
+    anymore, replaced by one row per plan+feature in `plan_features`.
 
     Returns:
-        list[dict]: Every row of `subscription_plans`, active or not.
+        list[dict]: Every plan, active or not, each with a `features` dict
+            built from its `plan_features` rows.
     """
     from app.core.db.database import direct_query
 
-    return direct_query("SELECT code, features, is_active FROM subscription_plans")
+    plan_rows = direct_query("SELECT code, is_active FROM plans")
+    feature_rows = direct_query("SELECT plan_code, feature_key, value FROM plan_features")
+
+    features_by_plan = {}
+    for row in feature_rows:
+        features_by_plan.setdefault(row["plan_code"], {})[row["feature_key"]] = row["value"]
+
+    return [
+        {"code": p["code"], "is_active": p["is_active"], "features": features_by_plan.get(p["code"], {})}
+        for p in plan_rows
+    ]
 
 
 def test_plan_codes_match_the_database(plans):

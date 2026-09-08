@@ -5,15 +5,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.core.security.deps import require_api_key
-from app.schemas import instruments as instruments_schemas
+from app.schemas import instruments as schemas
 from app.schemas.common import Envelope, ErrorEnvelope, Symbol, envelope_
-from app.services import instruments as instruments_services
+from app.services import instruments as services
 
 router = APIRouter(prefix="/instruments", tags=["instruments"]) 
 
-@router.get("", response_model=Envelope[list[instruments_schemas.Instrument]],
+@router.get("", response_model=Envelope[list[schemas.Instrument]],
                 responses={x:{"model": ErrorEnvelope} for x in [403,]})
-def list_instruments(payload: Annotated[instruments_schemas.InstrumentFilters, Query()]):
+def list_instruments(payload: Annotated[schemas.InstrumentFilters, Query()]):
     """Lists instruments, filtered and paginated.
 
     The filters arrive as a model read from the query string, so unknown
@@ -35,7 +35,7 @@ def list_instruments(payload: Annotated[instruments_schemas.InstrumentFilters, Q
         GET /api/v1/instruments?type=bond&limit=2
         GET /api/v1/instruments?sort=name&limit=5&offset=5
     """
-    rows , count = instruments_services.list_instruments(type_=payload.type, 
+    rows , count = services.list_instruments(type_=payload.type, 
                                                 sector=payload.sector , 
                                                 limit=payload.limit,
                                                 offset=payload.offset,
@@ -46,9 +46,9 @@ def list_instruments(payload: Annotated[instruments_schemas.InstrumentFilters, Q
 
 
 
-@router.get("/{symbol}", response_model=Envelope[instruments_schemas.Instrument],
+@router.get("/{symbol}", response_model=Envelope[schemas.Instrument],
             responses={x:{"model": ErrorEnvelope} for x in [404,422]})
-def get_by_symbol(symbol:Symbol, exchange: Annotated[instruments_schemas.InstrumentCheckExchange, Query()]):
+def get_by_symbol(symbol:Symbol, exchange: Annotated[schemas.InstrumentCheckExchange, Query()]):
     """Returns one instrument, identified by symbol and optionally by exchange.
 
     The two arguments come from two different places, which is why they cannot
@@ -75,16 +75,16 @@ def get_by_symbol(symbol:Symbol, exchange: Annotated[instruments_schemas.Instrum
         GET /api/v1/instruments/SNTS?exchange=BRVM
         GET /api/v1/instruments/SNTS          -> 409 if listed twice
     """
-    rows= instruments_services.get_by_symbol(symbol=symbol,exchange=exchange.exchange)
+    rows= services.get_by_symbol(symbol=symbol,exchange=exchange.exchange)
    
     return envelope_(data=rows)
 
 
 @router.post("",status_code=201,
-            response_model=Envelope[instruments_schemas.Instrument],
+            response_model=Envelope[schemas.Instrument],
             dependencies=[Depends(require_api_key)]
             )
-def create_instrument(payload: instruments_schemas.InstrumentCreate):
+def create_instrument(payload: schemas.InstrumentCreate):
     """Creates an instrument and returns the row the database stored.
 
     The body is validated **and normalised** by InstrumentCreate before this
@@ -112,7 +112,7 @@ def create_instrument(payload: instruments_schemas.InstrumentCreate):
         {"symbol": "TESTX", "name": "Test", "type": "stock",
          "sector": "INDUSTRIELS", "exchange": "NGX"}
     """
-    rows = instruments_services.create_instrument(symbol=payload.symbol,
+    rows = services.create_instrument(symbol=payload.symbol,
                                               name=payload.name,
                                               type_=payload.type,
                                               sector=payload.sector,

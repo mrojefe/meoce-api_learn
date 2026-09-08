@@ -1,20 +1,20 @@
 """Entitlements — what the caller's plan allows.
 
-Answers one question, asked by every route that gates anything: *given this
-user, what may they do?*
+    Answers one question, asked by every route that gates anything: *given this
+    user, what may they do?*
 
-The answer is deliberately NOT in the token. A token lasts 24 hours and a plan
-does not: someone who upgrades at 10:00 would wait until 16:00 for access, and
-someone who cancels would keep paid features just as long. So the rule is:
+    The answer is deliberately NOT in the token. A token lasts 24 hours and a plan
+    does not: someone who upgrades at 10:00 would wait until 16:00 for access, and
+    someone who cancels would keep paid features just as long. So the rule is:
 
-    put in a token only what cannot change during the token's life
+        put in a token only what cannot change during the token's life
 
-The user id cannot change. The plan can. Hence a lookup.
+    The user id cannot change. The plan can. Hence a lookup.
 
-**Cost, stated plainly:** one query per request that gates something. A short
-cache would remove it, and is deliberately not here — caching is its own
-subject, and copied caching code is code nobody can explain. Revisit once it
-is understood, not before.
+    **Cost, stated plainly:** one query per request that gates something. A short
+    cache would remove it, and is deliberately not here — caching is its own
+    subject, and copied caching code is code nobody can explain. Revisit once it
+    is understood, not before.
 """
 
 from app.core.db.database import query
@@ -25,86 +25,129 @@ DEFAULT_PLAN_CODE = PlanCode.FREE
 
 
 def resolve_entitlements(user_id: str) -> PlanFeatures:
-    """Returns what this user's plan grants.
+    """Returns what this user is actually entitled to: their plan, with any
+        individual grants layered on top.
 
-    Two conditions decide whether a subscription counts, and both are needed:
+        Two conditions decide whether a subscription counts, and both are needed:
 
-    * `status = 'active'` — the obvious one.
-    * `current_period_end` still in the future, or absent.
+        * `status = 'active'` — the obvious one.
+        * `current_period_end` still in the future, or absent.
 
-    The second exists because the data disagrees with the first. Measured on
-    staging 2026-09-02: **four** subscriptions are marked active with a period
-    that ended in the past. Trusting `status` alone would grant paid features to
-    accounts that stopped paying — the row says active because nothing has run
-    to say otherwise, not because it is true.
+        The second exists because the data disagrees with the first. Measured on
+        staging 2026-09-02: **four** subscriptions are marked active with a period
+        that ended in the past. Trusting `status` alone would grant paid features to
+        accounts that stopped paying — the row says active because nothing has run
+        to say otherwise, not because it is true.
 
-    A NULL `current_period_end` is treated as no expiry, which is what a free
-    plan looks like.
+        A NULL `current_period_end` is treated as no expiry, which is what a free
+        plan looks like.
 
-    Falls back to the free plan when nothing matches — an unknown user, a user
-    with no subscription row, an expired one. Never raises: a caller that cannot
-    be identified gets the least, rather than an error page. Today every one of
-    the 167 users has a row, but "true today" is not "guaranteed", and a signup
-    bug should not become a 500.
+        Falls back to the free plan when nothing matches — an unknown user, a user
+        with no subscription row, an expired one. Never raises: a caller that cannot
+        be identified gets the least, rather than an error page. Today every one of
+        the 167 users has a row, but "true today" is not "guaranteed", and a signup
+        bug should not become a 500.
 
-    Args:
-        user_id (str): The authenticated caller, from `get_current_user_id`.
+        On top of the plan, individual `user_features` grants win per key — the
+        à-la-carte layer, same rule as the real API's `get_user_entitlements()` SQL
+        function: a non-expired grant for a feature overrides whatever the plan
+        says for that one feature, and every other key keeps its plan value.
 
-    Returns:
-        PlanFeatures: The plan's features, parsed and validated. A typo'd key in
-            the JSONB raises here rather than silently reading as unlimited.
+        Args:
+            user_id (str): The authenticated caller, from `get_current_user_id`.
 
-    Examples:
-        >>> resolve_entitlements("c028c759-5fee-402b-a09f-ef39f3c22f31")
-        PlanFeatures(max_watchlists=2, history_years_max=3, ...)
+        Returns:
+            PlanFeatures: The plan's features, with any individual grants applied,
+                parsed and validated. A typo'd key in the JSONB raises here rather
+                than silently reading as unlimited.
+
+        Examples:
+            >>> resolve_entitlements("c028c759-5fee-402b-a09f-ef39f3c22f31")
+            PlanFeatures(max_watchlists=2, history_years_max=3, ...)
     """
     sql_plan = """
-        SELECT p.features
+        SELECT pf.feature_key, pf.value
         FROM subscriptions AS s
-        JOIN subscription_plans AS p
-            ON p.code = s.plan_code
+        JOIN plan_features AS pf
+            ON pf.plan_code = s.plan_code
         WHERE s.user_id = %s
           AND s.status = 'active'
           AND (s.current_period_end IS NULL OR s.current_period_end > now())
-        ORDER BY s.started_at DESC
-        LIMIT 1
         """
-    params_plan=user_id    
+    params_plan=user_id
     rows = query(sql_plan, (params_plan,))
 
-    if not rows:
-        return _default_plan()
+    if rows:
+        plan = {row["feature_key"]: row["value"] for row in rows}
+        plan = {**_default_plan_features(), **plan}
+    else:
+        plan = _default_plan_features()
 
-    return PlanFeatures(**rows[0]["features"])
+    merged = {**plan, **_active_grants(user_id)}
+
+    return PlanFeatures(**merged)
 
 
-def _default_plan() -> PlanFeatures:
-    """The free plan, read from the database rather than hardcoded.
+def _active_grants(user_id: str) -> dict:
+    """The caller's individual `user_features` grants, one value per key.
 
-    Hardcoding the fallback would create a second truth: change a free limit in
-    `subscription_plans` and the fallback would keep the old one, so a user
-    without a subscription row would get different limits from one who has the
-    free plan explicitly.
+        A user can hold more than one grant for the same feature (the primary
+        key is `(user_id, feature_key, source)` — see the payment/subscription
+        Miro diagram) — an addon and a support-team override could both exist
+        at once. `DISTINCT ON` picks exactly one per `feature_key`, the most
+        recently granted, same tie-break the real API's SQL function uses.
 
-    If even that lookup fails — the free plan renamed or deleted — the bare
-    `PlanFeatures()` defaults apply: every switch off, every limit unlimited.
-    That asymmetry is uncomfortable and deliberate: it is the shape of the
-    model, and a plan table so broken that 'free' is missing is a problem to
-    fix, not to paper over here.
+        Args:
+            user_id (str): The authenticated caller.
 
-    Returns:
-        PlanFeatures: The free plan's features.
+        Returns:
+            dict: feature_key -> value, non-expired grants only. Empty if the
+                caller has none — true for everyone today, `user_features` is
+                unused in staging.
     """
-    sql_default_plan =  "SELECT features FROM subscription_plans WHERE code = %s"
+    sql_grants = """
+                    SELECT DISTINCT ON (feature_key) feature_key, value
+                    FROM user_features
+                    WHERE user_id = %s
+                    AND (expires_at IS NULL OR expires_at > now())
+                    ORDER BY feature_key, granted_at DESC
+                """
+    params_grants = user_id
+    rows = query(sql_grants, (params_grants,))
+
+    current_user_all_available_addon = {row["feature_key"]: row["value"] for row in rows}
+    return current_user_all_available_addon
+
+
+def _default_plan_features() -> dict:
+    """The free plan's raw features dict, read from the database rather than
+        hardcoded.
+
+        Hardcoding the fallback would create a second truth: change a free
+        limit in `subscription_plans` and the fallback would keep the old one,
+        so a user without a subscription row would get different limits from
+        one who has the free plan explicitly.
+
+        Returns a dict, not `PlanFeatures`: `resolve_entitlements` still needs
+        to merge this with any individual grants before building the final,
+        validated `PlanFeatures` once, at the end.
+
+        Returns:
+            dict: The free plan's features, as stored — not yet validated.
+
+        Raises:
+            RuntimeError: The free plan itself is missing from
+                `subscription_plans` — a 500, not a fallback. The caller asked
+                for their entitlements, not for the free plan; a plan table
+                this broken is our problem, not something to paper over here.
+    """
+    sql_default_plan = "SELECT feature_key, value FROM plan_features WHERE plan_code = %s"
     params_default_plan = DEFAULT_PLAN_CODE
-    rows = query( sql_default_plan  , (params_default_plan,),)
+    rows = query(sql_default_plan, (params_default_plan,))
 
     if not rows:
-        # A 500, not a 404. The caller asked for their watchlists, not for the
-        # free plan — the plan table being broken is our problem, and a bare
-        # raise gives the catch-all handler a traceback to log.
         raise RuntimeError(
-            f"plan {DEFAULT_PLAN_CODE!r} missing from subscription_plans"
+            f"plan {DEFAULT_PLAN_CODE!r} has no rows in plan_features"
         )
 
-    return PlanFeatures(**rows[0]["features"])
+    return {row["feature_key"]: row["value"] for row in rows}
