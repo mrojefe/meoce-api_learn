@@ -43,7 +43,18 @@ def fake_request():
 
 
 def _cleanup(phone: str) -> None:
-    query("DELETE FROM users WHERE phone = %s", (phone,), nothing_return=True)
+    """Deletes the account owning this whatsapp identity, if any.
+
+    NOTE: identity schema is accounts (root) + user_identities (one row
+    per login method) -- not a flat users.phone column.
+    """
+    query(
+        "DELETE FROM accounts WHERE id = ("
+        "SELECT account_id FROM user_identities "
+        "WHERE provider = 'whatsapp' AND provider_uid = %s)",
+        (phone,),
+        nothing_return=True,
+    )
 
 
 def _mock_waha(*, chat_id: str = "99912345@lid", messages: list[dict] | None = None):
@@ -111,23 +122,23 @@ def test_status_confirms_a_new_signup_on_a_matching_message(fake_request):
     assert "refresh_token" in status
 
     row = dict(query(
-        "SELECT phone, phone_verified, auth_provider FROM users WHERE phone = %s",
+        "SELECT verified FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s",
         (sender_chat_id,),
     )[0])
-    assert row["phone_verified"] is True
-    assert row["auth_provider"] == "whatsapp"
+    assert row["verified"] is True
 
     _cleanup(sender_chat_id)
 
 
 def test_status_logs_into_an_existing_phone_without_duplicating_it(fake_request):
     sender_chat_id = f"test-{uuid.uuid4().hex[:10]}@c.us"
-    existing = query(
-        "INSERT INTO users (phone, phone_verified, auth_provider) "
-        "VALUES (%s, true, 'whatsapp') RETURNING id",
-        (sender_chat_id,),
-    )[0]
-    existing_id = str(existing["id"])
+    existing_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'whatsapp', %s, true, now())",
+        (existing_id, sender_chat_id),
+        nothing_return=True,
+    )
 
     result = start_whatsapp_signup(fake_request)
     matching_message = {
@@ -145,9 +156,12 @@ def test_status_logs_into_an_existing_phone_without_duplicating_it(fake_request)
 
     assert status["status"] == "confirmed"
 
-    rows = query("SELECT id FROM users WHERE phone = %s", (sender_chat_id,))
+    rows = query(
+        "SELECT account_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s",
+        (sender_chat_id,),
+    )
     assert len(rows) == 1
-    assert str(rows[0]["id"]) == existing_id
+    assert str(rows[0]["account_id"]) == existing_id
 
     _cleanup(sender_chat_id)
 
@@ -192,11 +206,13 @@ def test_status_ignores_outbound_messages(fake_request):
 
 
 def test_attach_succeeds_for_an_authenticated_user(fake_request):
-    new_user = query(
-        "INSERT INTO users (email, password_hash) VALUES (%s, 'x') RETURNING id",
-        (f"test-attach-{uuid.uuid4()}@example.com",),
-    )[0]
-    user_id = str(new_user["id"])
+    user_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, credential) "
+        "VALUES (%s, 'email', %s, 'x')",
+        (user_id, f"test-attach-{uuid.uuid4()}@example.com"),
+        nothing_return=True,
+    )
 
     result = start_whatsapp_attach(user_id, fake_request)
     sender_chat_id = f"test-{uuid.uuid4().hex[:10]}@c.us"
@@ -218,26 +234,31 @@ def test_attach_succeeds_for_an_authenticated_user(fake_request):
     assert "access_token" not in status
 
     row = dict(query(
-        "SELECT phone, phone_verified FROM users WHERE id = %s", (user_id,),
+        "SELECT provider_uid, verified FROM user_identities "
+        "WHERE account_id = %s AND provider = 'whatsapp'",
+        (user_id,),
     )[0])
-    assert row["phone"] == sender_chat_id
-    assert row["phone_verified"] is True
+    assert row["provider_uid"] == sender_chat_id
+    assert row["verified"] is True
 
-    query("DELETE FROM users WHERE id = %s", (user_id,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (user_id,), nothing_return=True)
 
 
 def test_attach_rejects_a_phone_already_claimed_by_another_account(fake_request):
-    other_user = query(
-        "INSERT INTO users (email, password_hash) VALUES (%s, 'x') RETURNING id",
-        (f"test-attach-other-{uuid.uuid4()}@example.com",),
-    )[0]
-    other_id = str(other_user["id"])
+    other_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, credential) "
+        "VALUES (%s, 'email', %s, 'x')",
+        (other_id, f"test-attach-other-{uuid.uuid4()}@example.com"),
+        nothing_return=True,
+    )
 
     sender_chat_id = f"test-{uuid.uuid4().hex[:10]}@c.us"
+    other_account_with_phone = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
     query(
-        "INSERT INTO users (phone, phone_verified, auth_provider) "
-        "VALUES (%s, true, 'whatsapp')",
-        (sender_chat_id,),
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'whatsapp', %s, true, now())",
+        (other_account_with_phone, sender_chat_id),
         nothing_return=True,
     )
 
@@ -255,7 +276,7 @@ def test_attach_rejects_a_phone_already_claimed_by_another_account(fake_request)
     ), pytest.raises(ConflictError):
         check_whatsapp_status(result["code"])
 
-    query("DELETE FROM users WHERE id = %s", (other_id,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (other_id,), nothing_return=True)
     _cleanup(sender_chat_id)
 
 

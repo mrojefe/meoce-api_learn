@@ -157,33 +157,59 @@ def _find_or_link_account(payload: dict) -> str:
         payload (dict): The decoded, already-verified Google ID token.
 
     Returns:
-        str: The `users.id` for this Google sign-in, whether just created,
-            just linked, or already there.
+        str: The `accounts.id` for this Google sign-in, whether just
+            created, just linked, or already there.
     """
     google_sub = payload["sub"]
 
-    rows = query("SELECT id, auth_provider FROM users WHERE google_sub = %s", (google_sub,))
+    # NOTE: identity schema is user_identities (one row per login method),
+    # not a flat users table with a single auth_provider column -- "found
+    # by google_sub" means a 'google' identity row already exists.
+    rows = query(
+        "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s",
+        (google_sub,),
+    )
 
-    if not rows:
-        rows = query("SELECT id, auth_provider FROM users WHERE email = %s", (payload["email"],))
+    if rows:
+        user_id = str(rows[0]["account_id"])
+        _resync_google_fields(user_id, payload)
+        return user_id
+
+    # No google identity yet -- fall back to matching an existing 'email'
+    # identity for this address (a password account linking Google for the
+    # first time). REVIEW: a WhatsApp-only account has no email row
+    # anywhere in user_identities under this normalized schema, so the old
+    # flat-users design's "match a whatsapp account by email too" is no
+    # longer reachable -- there is nothing to match against. Flagged to JF,
+    # not silently dropped.
+    rows = query(
+        "SELECT account_id, verified, credential FROM user_identities "
+        "WHERE provider = 'email' AND provider_uid = %s",
+        (payload["email"],),
+    )
 
     if not rows:
         return _create_google_account(payload)
 
-    row = dict(rows[0])
-    user_id = str(row["id"])
-    auth_provider = row["auth_provider"]
+    user_id = str(rows[0]["account_id"])
 
-    if auth_provider in ("password", "whatsapp"):
-        query(
-            "UPDATE users SET auth_provider = 'google', email_verified = true, "
-            "password_hash = NULL WHERE id = %s",
-            (user_id,),
-            nothing_return=True,
-        )
-    # auth_provider == "google" already: an ordinary returning sign-in,
-    # nothing provider-specific to change — _resync_google_fields below
-    # still refreshes email/name/picture/locale/hd either way.
+    # Google's own verification is authoritative (see module docstring):
+    # link a new 'google' identity onto this account, and clear the email
+    # identity's credential so the password can't be used until reset --
+    # safe because request_password_reset/reset_password work regardless
+    # of which identities currently exist for the account.
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'google', %s, true, now())",
+        (user_id, google_sub),
+        nothing_return=True,
+    )
+    query(
+        "UPDATE user_identities SET credential = NULL "
+        "WHERE account_id = %s AND provider = 'email'",
+        (user_id,),
+        nothing_return=True,
+    )
 
     _resync_google_fields(user_id, payload)
 
@@ -193,15 +219,10 @@ def _find_or_link_account(payload: dict) -> str:
 def _create_google_account(payload: dict) -> str:
     """Inserts a brand-new account for a Google identity never seen before.
 
-    The `mirror_user_profile` trigger (see
-    `supabase/migrations/20260908120000_swap_users_user_profiles_names.sql`)
-    fires on this INSERT and creates the matching `user_profiles` row, but
-    it only sets `id`/`username` — it derives a username from the email and
-    nothing else, so it never touches `first_name`/`last_name`/
-    `avatar_url`/`last_login`, and it never touches `user_preferences` at
-    all. Those are written here, via `_resync_google_fields` plus a first
-    `user_preferences` INSERT, or Google's profile data is silently
-    dropped on the floor.
+    NOTE: identity schema is accounts (root) + user_identities (one row
+    per login method) + user_profiles (display) -- unlike the old flat
+    users table, there is no mirror trigger auto-creating user_profiles
+    here, so this explicitly inserts all three rows itself.
 
     Args:
         payload (dict): The decoded, already-verified Google ID token.
@@ -209,13 +230,26 @@ def _create_google_account(payload: dict) -> str:
     Returns:
         str: The new account's id.
     """
-    sql_insert = """
-        INSERT INTO users (email, auth_provider, email_verified, google_sub, google_hd)
-        VALUES (%s, 'google', true, %s, %s)
-        RETURNING id
-        """
-    rows = query(sql_insert, (payload["email"], payload["sub"], payload.get("hd")))
-    user_id = str(rows[0]["id"])
+    user_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+
+    query(
+        "INSERT INTO user_identities "
+        "(account_id, provider, provider_uid, verified, verified_at, workspace_domain) "
+        "VALUES (%s, 'google', %s, true, now(), %s)",
+        (user_id, payload["sub"], payload.get("hd")),
+        nothing_return=True,
+    )
+    query(
+        "INSERT INTO user_profiles (id) VALUES (%s)",
+        (user_id,),
+        nothing_return=True,
+    )
+
+    # Per JF's 2026-09-13 decision: a Google-only account still gets its
+    # own 'email' identity row (credential NULL, verified true) so
+    # get_profile/lookups have somewhere to read this account's email
+    # from, uniformly with password/whatsapp accounts.
+    _sync_email_identity(user_id, payload["email"])
 
     _sync_profile_fields(user_id, payload)
 
@@ -252,15 +286,37 @@ def _resync_google_fields(user_id: str, payload: dict) -> None:
         payload (dict): The decoded, already-verified Google ID token.
     """
     # GOOGLE-AUTHORITATIVE: every field below is overwritten from Google's
-    # token on every sign-in, except google_sub (the permanent anchor).
+    # token on every sign-in, except provider_uid/google_sub (the permanent
+    # anchor). workspace_domain/display_name_snapshot/avatar_url_snapshot
+    # are the columns this schema actually has for a provider identity;
+    # verified is already true from creation and never needs re-touching.
     # This includes silently reverting a user's manually-changed
     # default_language to their current Google locale — intentional, not
     # a bug.
     query(
-        "UPDATE users SET email = %s, email_verified = true, google_hd = %s WHERE id = %s",
-        (payload["email"], payload.get("hd"), user_id),
+        "UPDATE user_identities SET workspace_domain = %s, "
+        "display_name_snapshot = %s, avatar_url_snapshot = %s "
+        "WHERE account_id = %s AND provider = 'google'",
+        (
+            payload.get("hd"),
+            f"{payload.get('given_name', '')} {payload.get('family_name', '')}".strip() or None,
+            payload.get("picture"),
+            user_id,
+        ),
         nothing_return=True,
     )
+
+    # Per JF's 2026-09-13 decision: email is also Google-authoritative,
+    # kept in sync on the account's 'email' identity row (separate from
+    # the 'google' identity keyed by sub) every sign-in, same as every
+    # other Google-sourced field above.
+    # REVIEW: provider_uid is globally UNIQUE across user_identities --
+    # if Google's current email for this sub already belongs to a
+    # DIFFERENT account's 'email' identity, this raises a real unique
+    # violation rather than silently reassigning that email. Accepted for
+    # now (same "let a genuine conflict surface" stance as elsewhere in
+    # this file); revisit if this proves reachable in practice.
+    _sync_email_identity(user_id, payload["email"])
 
     _sync_profile_fields(user_id, payload)
 
@@ -278,6 +334,31 @@ def _resync_google_fields(user_id: str, payload: dict) -> None:
     # else: no usable locale claim on this sign-in — leave whatever
     # default_language is already on file untouched, rather than
     # clobbering a real value with a default.
+
+
+def _sync_email_identity(user_id: str, email: str) -> None:
+    """Upserts this account's 'email' identity row so it always reflects
+    Google's current email claim — added per JF's 2026-09-13 decision so
+    a Google-only account has somewhere to store/look up its email,
+    uniformly with password/whatsapp accounts.
+
+    `credential` is deliberately never touched here — a password account
+    linking Google has its credential cleared separately (see
+    `_find_or_link_account`'s linking branch), and a brand-new Google-only
+    account never had one to begin with.
+
+    Args:
+        user_id (str): The account being written.
+        email (str): The token's current `email` claim.
+    """
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'email', %s, true, now()) "
+        "ON CONFLICT (account_id, provider) DO UPDATE SET "
+        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()",
+        (user_id, email),
+        nothing_return=True,
+    )
 
 
 def _sync_profile_fields(user_id: str, payload: dict) -> None:

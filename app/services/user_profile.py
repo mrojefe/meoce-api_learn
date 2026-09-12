@@ -1,13 +1,14 @@
-"""User profile service — the caller's own row in `user_profiles` joined to
-`users`, and nothing else.
+"""User profile service — the caller's own row in `user_profiles`, joined to
+`accounts` (status) and `user_identities` (email/phone), and nothing else.
 
-`user_profiles` and `users` no longer duplicate any column: `user_profiles`
-holds display fields (username, name, bio, avatar, country,
-profile_completed), `users` holds identity/credentials (email, phone,
-password_hash, auth_provider). This service reads both, joined, because a
-profile screen shows fields from both tables — but only `user_profiles`
-columns are ever written here (`update_profile` and `update_identity_fields`
-both target `user_profiles`; nothing in this file writes `users`).
+`user_profiles` holds display fields (username, name, bio, avatar, country,
+profile_completed); identity/credentials live in `user_identities` (one row
+per login method: email, whatsapp, google), and account-level facts
+(status, role) live in `accounts`. This service reads all three, joined,
+because a profile screen shows fields from more than one table — but only
+`user_profiles` columns are ever written here (`update_profile` and
+`update_identity_fields` both target `user_profiles`; nothing in this file
+writes `accounts` or `user_identities`).
 
 Every function here takes `user_id` from a verified token. There is no way to
 read or edit anyone else's profile: no `{user_id}` ever appears in a URL for
@@ -40,12 +41,21 @@ def get_profile(user_id: str) -> dict:
         >>> get_profile(uid)
         {'username': 'jfe', 'email': 'jfe@example.com', ...}
     """
+    # NOTE: identity schema is accounts (status/role) + user_identities
+    # (email/phone, one row per login method) + user_profiles (display) --
+    # not a flat users table. email/phone come from whichever
+    # user_identities row has that provider; status from accounts.
     sql_profile = """
-        SELECT u.username, p.email, p.phone, u.first_name, u.last_name,
+        SELECT u.username,
+               (SELECT provider_uid FROM user_identities
+                   WHERE account_id = u.id AND provider = 'email') AS email,
+               (SELECT provider_uid FROM user_identities
+                   WHERE account_id = u.id AND provider = 'whatsapp') AS phone,
+               u.first_name, u.last_name,
                u.display_name, u.bio, u.avatar_url, u.country,
-               u.profile_completed, u.last_login, u.created_at, u.status
+               u.profile_completed, u.last_login, u.created_at, a.status
         FROM user_profiles AS u
-        JOIN users AS p ON p.id = u.id
+        JOIN accounts AS a ON a.id = u.id
         WHERE u.id = %s
         """
     params_profile = user_id

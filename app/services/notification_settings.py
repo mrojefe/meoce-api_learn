@@ -1,9 +1,11 @@
 """Notification settings — phone, and whether it's been verified.
 
-    Lives on `users`, not `user_profiles`: verification state is an identity
-    fact, same table as email/password. Setting a new phone resets
-    `phone_verified` to False — a changed number has not been proven yet,
-    whatever the old one's state was.
+    NOTE: identity schema is user_identities (one row per login method),
+    not a flat users table -- phone/phone_verified live on the 'whatsapp'
+    provider row (provider_uid/verified), email on the 'email' provider
+    row (provider_uid). Setting a new phone resets verified to False on
+    that row — a changed number has not been proven yet, whatever the old
+    one's state was.
 """
 
 from app.core.db.database import query
@@ -18,8 +20,16 @@ def get_settings(user_id: str) -> dict:
         Returns:
             dict: phone, phone_verified, email.
     """
-    sql = "SELECT phone, phone_verified, email FROM users WHERE id = %s"
-    rows = query(sql, (user_id,))
+    sql = """
+        SELECT
+            (SELECT provider_uid FROM user_identities
+                WHERE account_id = %s AND provider = 'whatsapp') AS phone,
+            COALESCE((SELECT verified FROM user_identities
+                WHERE account_id = %s AND provider = 'whatsapp'), false) AS phone_verified,
+            (SELECT provider_uid FROM user_identities
+                WHERE account_id = %s AND provider = 'email') AS email
+        """
+    rows = query(sql, (user_id, user_id, user_id))
 
     return rows[0]
 
@@ -34,11 +44,20 @@ def update_phone(user_id: str, phone: str | None) -> dict:
         Returns:
             dict: phone, phone_verified, email — as it now stands.
     """
-    sql = """
-        UPDATE users
-        SET phone = %s, phone_verified = false, updated_at = now()
-        WHERE id = %s
-        """
-    query(sql, (phone, user_id), nothing_return=True)
+    if phone is None:
+        query(
+            "DELETE FROM user_identities WHERE account_id = %s AND provider = 'whatsapp'",
+            (user_id,),
+            nothing_return=True,
+        )
+    else:
+        query(
+            "INSERT INTO user_identities (account_id, provider, provider_uid, verified) "
+            "VALUES (%s, 'whatsapp', %s, false) "
+            "ON CONFLICT (account_id, provider) DO UPDATE SET "
+            "provider_uid = EXCLUDED.provider_uid, verified = false, verified_at = NULL",
+            (user_id, phone),
+            nothing_return=True,
+        )
 
     return get_settings(user_id)

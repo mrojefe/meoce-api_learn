@@ -18,19 +18,27 @@ TEST_PASSWORD_HASH = "not-a-real-hash"
 
 @pytest.fixture
 def existing_user():
-    """A throwaway account: `users` row inserted directly, `user_profiles`
-    row created by the mirror trigger."""
+    """A throwaway account: accounts + user_identities ('email') +
+    user_profiles rows, all inserted directly -- no mirror trigger creates
+    user_profiles under this schema, unlike the old flat users table.
+    """
     email = f"test-profile-{uuid.uuid4()}@example.com"
-    rows = query(
-        "INSERT INTO users (email, password_hash, email_verified) "
-        "VALUES (%s, %s, true) RETURNING id",
-        (email, TEST_PASSWORD_HASH),
+    user_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
+    query(
+        "INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified) "
+        "VALUES (%s, 'email', %s, %s, true)",
+        (user_id, email, TEST_PASSWORD_HASH),
+        nothing_return=True,
     )
-    user_id = rows[0]["id"]
+    query(
+        "INSERT INTO user_profiles (id) VALUES (%s)",
+        (user_id,),
+        nothing_return=True,
+    )
 
     yield user_id
 
-    query("DELETE FROM users WHERE id = %s", (user_id,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (user_id,), nothing_return=True)
 
 
 def test_update_identity_fields_writes_country_only(existing_user):

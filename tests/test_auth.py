@@ -45,18 +45,24 @@ def fake_request():
 
 @pytest.fixture
 def existing_user():
-    """A throwaway, already-verified account, cleaned up after."""
+    """A throwaway, already-verified account, cleaned up after.
+
+    NOTE: identity schema is accounts (root) + user_identities (one row
+    per login method) -- not a flat users table.
+    """
     email = f"test-auth-{uuid.uuid4()}@example.com"
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
     query(
-        "INSERT INTO users (email, password_hash, email_verified) VALUES (%s, %s, true)",
-        (email, hash_password(TEST_PASSWORD)),
+        "INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified) "
+        "VALUES (%s, 'email', %s, %s, true)",
+        (account_id, email, hash_password(TEST_PASSWORD)),
         nothing_return=True,
     )
     get_redis().delete(f"login:{email}")
 
     yield email
 
-    query("DELETE FROM users WHERE email = %s", (email,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (account_id,), nothing_return=True)
     get_redis().delete(f"login:{email}")
 
 
@@ -87,17 +93,17 @@ def test_signup_creates_an_account(fake_request):
     assert result["email"] == email
     assert "id" in result
 
-    query("DELETE FROM users WHERE email = %s", (email,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (result["id"],), nothing_return=True)
 
 
 def test_signup_rejects_duplicate_email(fake_request):
     email = f"test-signup-dup-{uuid.uuid4()}@example.com"
-    signup(email, TEST_PASSWORD, fake_request)
+    result = signup(email, TEST_PASSWORD, fake_request)
 
     with pytest.raises(ConflictError):
         signup(email, "AnotherPass456!", fake_request)
 
-    query("DELETE FROM users WHERE email = %s", (email,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (result["id"],), nothing_return=True)
 
 
 def test_refresh_exchanges_for_a_new_access_token(existing_user, fake_request):
@@ -178,8 +184,8 @@ def test_reset_password_changes_the_password(existing_user, fake_request):
         store_password_reset_token,
     )
 
-    sql = "SELECT id FROM users WHERE email = %s"
-    user_id = str(query(sql, (existing_user,))[0]["id"])
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
+    user_id = str(query(sql, (existing_user,))[0]["account_id"])
 
     token = generate_password_reset_token()
     store_password_reset_token(token, user_id)
@@ -205,8 +211,8 @@ def test_reset_password_rejects_an_already_used_token(existing_user):
         store_password_reset_token,
     )
 
-    sql = "SELECT id FROM users WHERE email = %s"
-    user_id = str(query(sql, (existing_user,))[0]["id"])
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
+    user_id = str(query(sql, (existing_user,))[0]["account_id"])
 
     token = generate_password_reset_token()
     store_password_reset_token(token, user_id)

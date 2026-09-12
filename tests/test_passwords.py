@@ -1,7 +1,7 @@
 """Guards password hashing/verification against the real database.
 
-Integration, not unit: `verify_password_match` reads `users` directly,
-so these tests need a reachable database — same reasoning as
+Integration, not unit: `verify_password_match` reads `user_identities`
+directly, so these tests need a reachable database — same reasoning as
 `test_reference_data.py`.
 """
 
@@ -19,19 +19,20 @@ TEST_PASSWORD = "TestPass123!"
 
 @pytest.fixture(scope="module")
 def test_user():
-    """Creates a throwaway users row, cleans it up after."""
+    """Creates a throwaway account + email identity, cleans it up after."""
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
     query(
         """
-        INSERT INTO users (id, email, password_hash, email_verified)
-        VALUES (gen_random_uuid(), %s, %s, true)
+        INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
+        VALUES (%s, 'email', %s, %s, true)
         """,
-        (TEST_EMAIL, hash_password(TEST_PASSWORD)),
+        (account_id, TEST_EMAIL, hash_password(TEST_PASSWORD)),
         nothing_return=True,
     )
 
     yield TEST_EMAIL
 
-    query("DELETE FROM users WHERE email = %s", (TEST_EMAIL,), nothing_return=True)
+    query("DELETE FROM accounts WHERE id = %s", (account_id,), nothing_return=True)
 
 
 def test_hash_password_differs_each_call():

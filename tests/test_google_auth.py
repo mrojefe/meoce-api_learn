@@ -65,7 +65,20 @@ def _payload(email: str, *, email_verified: bool = True,
 
 
 def _cleanup(email: str) -> None:
-    query("DELETE FROM users WHERE email = %s", (email,), nothing_return=True)
+    """Deletes the account owning this email identity, if any.
+
+    NOTE: identity schema is accounts (root) + user_identities (one row
+    per login method) -- not a flat users.email column, so cleanup goes
+    through user_identities to find the account_id, then deletes the
+    account (cascades to user_identities/user_profiles/user_preferences).
+    """
+    query(
+        "DELETE FROM accounts WHERE id = ("
+        "SELECT account_id FROM user_identities "
+        "WHERE provider = 'email' AND provider_uid = %s)",
+        (email,),
+        nothing_return=True,
+    )
 
 
 def test_google_sign_in_creates_a_new_account(fake_request):
@@ -81,27 +94,40 @@ def test_google_sign_in_creates_a_new_account(fake_request):
     assert "access_token" in result
     assert "refresh_token" in result
 
-    sql = """
-        SELECT u.auth_provider, u.password_hash, u.google_sub, u.google_hd,
-               p.first_name, p.last_name, p.last_login
-        FROM users AS u
-        JOIN user_profiles AS p ON p.id = u.id
-        WHERE u.email = %s
-        """
-    row = dict(query(sql, (email,))[0])
+    # NOTE: identity schema is accounts (root) + user_identities (one row
+    # per login method) + user_profiles (display) -- not a flat users
+    # table. The 'google' identity row carries provider_uid=sub/verified/
+    # workspace_domain; the 'email' identity row (added per JF's
+    # 2026-09-13 decision) carries the email and has credential NULL for
+    # a Google-only account; first_name/last_name/last_login live on
+    # user_profiles.
+    google_row = dict(query(
+        "SELECT provider_uid AS google_sub, workspace_domain AS google_hd "
+        "FROM user_identities WHERE account_id = "
+        "(SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s) "
+        "AND provider = 'google'",
+        (email,),
+    )[0])
+    email_row = dict(query(
+        "SELECT account_id, credential FROM user_identities "
+        "WHERE provider = 'email' AND provider_uid = %s",
+        (email,),
+    )[0])
+    profile_row = dict(query(
+        "SELECT first_name, last_name, last_login FROM user_profiles WHERE id = %s",
+        (email_row["account_id"],),
+    )[0])
 
-    assert row["auth_provider"] == "google"
-    assert row["password_hash"] is None
-    assert row["first_name"] == "Jean"
-    assert row["last_name"] == "Franck"
-    assert row["google_sub"] == sub
-    assert row["google_hd"] is None
-    assert row["last_login"] is not None
+    assert email_row["credential"] is None
+    assert profile_row["first_name"] == "Jean"
+    assert profile_row["last_name"] == "Franck"
+    assert google_row["google_sub"] == sub
+    assert google_row["google_hd"] is None
+    assert profile_row["last_login"] is not None
 
     prefs = dict(query(
-        "SELECT default_language FROM user_preferences WHERE user_id = "
-        "(SELECT id FROM users WHERE email = %s)",
-        (email,),
+        "SELECT default_language FROM user_preferences WHERE user_id = %s",
+        (email_row["account_id"],),
     )[0])
     assert prefs["default_language"] == "en"
 
@@ -122,11 +148,24 @@ def test_google_sign_in_links_an_existing_password_account(fake_request):
 
     assert "access_token" in result
 
-    sql = "SELECT auth_provider, password_hash FROM users WHERE email = %s"
-    row = dict(query(sql, (email,))[0])
+    # A 'google' identity now exists for this account, and the pre-existing
+    # 'email' identity's credential was cleared -- see the linking branch
+    # of _find_or_link_account.
+    account_id = query(
+        "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s",
+        (email,),
+    )[0]["account_id"]
+    has_google_identity = query(
+        "SELECT EXISTS (SELECT 1 FROM user_identities WHERE account_id = %s AND provider = 'google')",
+        (account_id,),
+    )[0]["exists"]
+    email_credential = query(
+        "SELECT credential FROM user_identities WHERE account_id = %s AND provider = 'email'",
+        (account_id,),
+    )[0]["credential"]
 
-    assert row["auth_provider"] == "google"
-    assert row["password_hash"] is None
+    assert has_google_identity is True
+    assert email_credential is None
 
     with pytest.raises(UnauthorizedError):
         login(email, TEST_PASSWORD)
@@ -150,8 +189,8 @@ def test_google_sign_in_is_idempotent_for_a_returning_user(fake_request):
     assert "access_token" in first
     assert "access_token" in second
 
-    sql = "SELECT id FROM users WHERE email = %s"
-    rows = query(sql, (email,))
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s"
+    rows = query(sql, (sub,))
     assert len(rows) == 1
 
     _cleanup(email)
@@ -189,16 +228,32 @@ def test_google_sign_in_resyncs_a_returning_user_from_a_changed_google_profile(f
     assert "access_token" in result
 
     sql = """
-        SELECT u.id, u.email, u.google_sub, p.first_name, p.last_name, p.avatar_url
-        FROM users AS u
-        JOIN user_profiles AS p ON p.id = u.id
-        WHERE u.google_sub = %s
+        SELECT ui.account_id, ui.provider_uid AS google_sub,
+               p.first_name, p.last_name, p.avatar_url
+        FROM user_identities AS ui
+        JOIN user_profiles AS p ON p.id = ui.account_id
+        WHERE ui.provider = 'google' AND ui.provider_uid = %s
         """
     rows = query(sql, (sub,))
     assert len(rows) == 1  # same account, no duplicate created
 
     row = dict(rows[0])
-    assert row["email"] == new_email
+    account_id = row["account_id"]
+
+    # email is Google-authoritative too (see _sync_email_identity) -- the
+    # account's 'email' identity row should now hold the NEW address, and
+    # the OLD address should no longer be claimed by anything.
+    current_email = query(
+        "SELECT provider_uid FROM user_identities WHERE account_id = %s AND provider = 'email'",
+        (account_id,),
+    )[0]["provider_uid"]
+    old_email_still_claimed = query(
+        "SELECT EXISTS (SELECT 1 FROM user_identities WHERE provider = 'email' AND provider_uid = %s)",
+        (original_email,),
+    )[0]["exists"]
+
+    assert current_email == new_email
+    assert old_email_still_claimed is False
     assert row["google_sub"] == sub
     assert row["first_name"] == "Evan"
     assert row["last_name"] == "Oboumou"
@@ -206,7 +261,7 @@ def test_google_sign_in_resyncs_a_returning_user_from_a_changed_google_profile(f
 
     prefs = dict(query(
         "SELECT default_language FROM user_preferences WHERE user_id = %s",
-        (row["id"],),
+        (account_id,),
     )[0])
     assert prefs["default_language"] == "fr"
 
@@ -223,8 +278,11 @@ def test_google_sign_in_sets_last_login_on_every_sign_in(fake_request):
     ):
         google_sign_in("fake-id-token", fake_request)
 
-    sql = "SELECT last_login FROM user_profiles WHERE id = (SELECT id FROM users WHERE email = %s)"
-    first_last_login = query(sql, (email,))[0]["last_login"]
+    sql = (
+        "SELECT last_login FROM user_profiles WHERE id = "
+        "(SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s)"
+    )
+    first_last_login = query(sql, (sub,))[0]["last_login"]
     assert first_last_login is not None
 
     get_redis().delete("google_sign_in:unknown")
@@ -235,7 +293,7 @@ def test_google_sign_in_sets_last_login_on_every_sign_in(fake_request):
     ):
         google_sign_in("fake-id-token", fake_request)
 
-    second_last_login = query(sql, (email,))[0]["last_login"]
+    second_last_login = query(sql, (sub,))[0]["last_login"]
     assert second_last_login is not None
 
     _cleanup(email)
@@ -265,11 +323,23 @@ def test_google_sign_in_matches_by_google_sub_even_if_email_changed(fake_request
     ):
         google_sign_in("fake-id-token", fake_request)
 
-    rows = query("SELECT id, email FROM users WHERE google_sub = %s", (sub,))
+    rows = query(
+        "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s",
+        (sub,),
+    )
     assert len(rows) == 1
-    assert rows[0]["email"] == second_email
+    account_id = rows[0]["account_id"]
 
-    assert query("SELECT EXISTS (SELECT 1 FROM users WHERE email = %s)", (first_email,))[0]["exists"] is False
+    current_email = query(
+        "SELECT provider_uid FROM user_identities WHERE account_id = %s AND provider = 'email'",
+        (account_id,),
+    )[0]["provider_uid"]
+    assert current_email == second_email
+
+    assert query(
+        "SELECT EXISTS (SELECT 1 FROM user_identities WHERE provider = 'email' AND provider_uid = %s)",
+        (first_email,),
+    )[0]["exists"] is False
 
     _cleanup(second_email)
 
@@ -291,7 +361,7 @@ def test_google_sign_in_rejects_an_unverified_email(fake_request):
     ), pytest.raises(UnauthorizedError):
         google_sign_in("fake-id-token", fake_request)
 
-    sql = "SELECT EXISTS (SELECT 1 FROM users WHERE email = %s)"
+    sql = "SELECT EXISTS (SELECT 1 FROM user_identities WHERE provider = 'email' AND provider_uid = %s)"
     assert query(sql, (email,))[0]["exists"] is False
 
 

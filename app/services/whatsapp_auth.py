@@ -286,18 +286,29 @@ def _confirm_signup(phone: str) -> dict:
     Returns:
         dict: status, access_token, refresh_token, token_type.
     """
-    rows = query("SELECT id FROM users WHERE phone = %s", (phone,))
+    # NOTE: identity schema is user_identities (one row per login method),
+    # not a flat users.phone column -- provider='whatsapp' rows are keyed
+    # by phone as provider_uid.
+    rows = query(
+        "SELECT account_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s",
+        (phone,),
+    )
 
     if rows:
-        user_id = str(rows[0]["id"])
+        user_id = str(rows[0]["account_id"])
     else:
-        sql_insert = """
-            INSERT INTO users (phone, phone_verified, auth_provider)
-            VALUES (%s, true, 'whatsapp')
-            RETURNING id
-            """
-        rows_insert = query(sql_insert, (phone,))
-        user_id = str(rows_insert[0]["id"])
+        user_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+        query(
+            "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+            "VALUES (%s, 'whatsapp', %s, true, now())",
+            (user_id, phone),
+            nothing_return=True,
+        )
+        query(
+            "INSERT INTO user_profiles (id) VALUES (%s)",
+            (user_id,),
+            nothing_return=True,
+        )
 
     return {
         "status": "confirmed",
@@ -329,7 +340,10 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
             (409) — same `UNIQUE(phone)`-guard reasoning as
             `auth.py`'s `_email_taken`.
     """
-    sql_taken = "SELECT EXISTS (SELECT 1 FROM users WHERE phone = %s AND id != %s)"
+    sql_taken = (
+        "SELECT EXISTS (SELECT 1 FROM user_identities "
+        "WHERE provider = 'whatsapp' AND provider_uid = %s AND account_id != %s)"
+    )
     rows_taken = query(sql_taken, (phone, user_id))
 
     if rows_taken[0]["exists"]:
@@ -339,8 +353,11 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
         )
 
     query(
-        "UPDATE users SET phone = %s, phone_verified = true WHERE id = %s",
-        (phone, user_id),
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'whatsapp', %s, true, now()) "
+        "ON CONFLICT (account_id, provider) DO UPDATE SET "
+        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()",
+        (user_id, phone),
         nothing_return=True,
     )
 

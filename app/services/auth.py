@@ -181,16 +181,28 @@ def signup(email: str, password: str, request: Request) -> dict:
             f"email {email!r} is already registered", ErrorCode.EMAIL_ALREADY_REGISTERED
         )
 
-    sql = """
-        INSERT INTO users (email, password_hash)
-        VALUES (%s, %s)
-        RETURNING id, email
-        """
-    # password is already HardPassword-validated by SignupRequest before it gets here
-    rows = query(sql, (email, hash_password(password)))
-    row = dict(rows[0])
+    # NOTE: identity schema is accounts (root) + user_identities (one row
+    # per login method) + user_profiles (display) -- not a flat users
+    # table. Creating an account needs all three rows, not one INSERT.
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
 
-    _send_verification(str(row["id"]), row["email"])
+    # password is already HardPassword-validated by SignupRequest before it gets here
+    query(
+        """
+        INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
+        VALUES (%s, 'email', %s, %s, false)
+        """,
+        (account_id, email, hash_password(password)),
+        nothing_return=True,
+    )
+    query(
+        "INSERT INTO user_profiles (id) VALUES (%s)",
+        (account_id,),
+        nothing_return=True,
+    )
+
+    row = {"id": account_id, "email": email}
+    _send_verification(str(account_id), email)
 
     return row
 
@@ -221,13 +233,13 @@ def resend_verification(email: str, request: Request) -> None:
         "too many resend attempts, try again later",
     )
 
-    sql = "SELECT id FROM users WHERE email = %s"
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
     if not rows:
         return
 
-    _send_verification(str(rows[0]["id"]), email)
+    _send_verification(str(rows[0]["account_id"]), email)
 
 
 def verify_email(token: str) -> bool:
@@ -247,7 +259,8 @@ def verify_email(token: str) -> bool:
         return False
 
     query(
-        "UPDATE users SET email_verified = true WHERE id = %s",
+        "UPDATE user_identities SET verified = true, verified_at = now() "
+        "WHERE account_id = %s AND provider = 'email'",
         (user_id,),
         nothing_return=True,
     )
@@ -280,13 +293,13 @@ def request_password_reset(email: str, request: Request) -> None:
         "too many password reset attempts, try again later",
     )
 
-    sql = "SELECT id FROM users WHERE email = %s"
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
     if not rows:
         return
 
-    user_id = str(rows[0]["id"])
+    user_id = str(rows[0]["account_id"])
 
     token = generate_password_reset_token()
     store_password_reset_token(token, user_id)
@@ -327,7 +340,7 @@ def reset_password(token: str, new_password: str) -> None:
         )
 
     query(
-        "UPDATE users SET password_hash = %s WHERE id = %s",
+        "UPDATE user_identities SET credential = %s WHERE account_id = %s AND provider = 'email'",
         (hash_password(new_password), user_id),
         nothing_return=True,
     )
@@ -348,7 +361,7 @@ def _send_verification(user_id: str, email: str) -> None:
 
 def _email_taken(email: str) -> bool:
     """Whether an account already exists for this email."""
-    sql = "SELECT EXISTS (SELECT 1 FROM users WHERE email = %s)"
+    sql = "SELECT EXISTS (SELECT 1 FROM user_identities WHERE provider = 'email' AND provider_uid = %s)"
     rows = query(sql, (email,))
 
     return rows[0]["exists"]
@@ -360,8 +373,7 @@ def _get_user_id_by_email(email: str) -> str:
     Called only after `verify_password_match` succeeds, so the row is
     guaranteed to be there — this never needs its own not-found handling.
     """
-    sql = "SELECT id FROM users WHERE email = %s"
+    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
-
-    return str(rows[0]["id"])
+    return str(rows[0]["account_id"])
