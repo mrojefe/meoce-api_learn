@@ -56,6 +56,19 @@ class ErrorCode(StrEnum):
     ACCOUNT_SUPENDED="account_suspended"
     ACCOUNT_BANNED="account_banned"
     RATE_LIMIT ="rate_limit_exceeded"
+    # Specific conflict/auth codes below: CONFLICT/UNAUTHORIZED alone were too
+    # coarse for the frontend to react differently (e.g. "email taken" should
+    # offer a login link; "username taken" should suggest an alternative).
+    # Not used for anything login/credential-related -- those stay on the
+    # deliberately vague UNAUTHORIZED above, on purpose (enumeration
+    # prevention, see UnauthorizedError's docstring).
+    EMAIL_ALREADY_REGISTERED = "email_already_registered"
+    USERNAME_TAKEN = "username_taken"
+    PHONE_ALREADY_LINKED = "phone_already_linked"
+    INSTRUMENT_ALREADY_EXISTS = "instrument_already_exists"
+    SYMBOL_ALREADY_IN_WATCHLIST = "symbol_already_in_watchlist"
+    GOOGLE_CREDENTIAL_INVALID = "google_credential_invalid"
+    GOOGLE_EMAIL_NOT_VERIFIED = "google_email_not_verified"
 
 
 logger = logging.getLogger("meoce.api")

@@ -3,7 +3,7 @@
 from psycopg.errors import UniqueViolation
 
 from app.core.db.database import query
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, ErrorCode, NotFoundError
 from app.core.reference import AllowedSort
 
 
@@ -356,6 +356,6 @@ def create_instrument(symbol: str, name: str, type_: str,
     try :
         new_instrument = query( sql_add_symbol, params_add_symbol )[0]        
     except UniqueViolation:
-        raise ConflictError("This instrument already exist")
+        raise ConflictError("This instrument already exist", ErrorCode.INSTRUMENT_ALREADY_EXISTS)
                                         
     return   new_instrument

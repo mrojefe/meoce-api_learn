@@ -57,7 +57,7 @@ from fastapi import Request
 
 from app.core.config import get_settings
 from app.core.db.database import query
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ErrorCode
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
 from app.core.security.deps.rate_limit import check_rate_limit
@@ -333,7 +333,10 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
     rows_taken = query(sql_taken, (phone, user_id))
 
     if rows_taken[0]["exists"]:
-        raise ConflictError("this WhatsApp number is already linked to another account")
+        raise ConflictError(
+            "this WhatsApp number is already linked to another account",
+            ErrorCode.PHONE_ALREADY_LINKED,
+        )
 
     query(
         "UPDATE users SET phone = %s, phone_verified = true WHERE id = %s",

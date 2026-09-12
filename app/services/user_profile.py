@@ -15,7 +15,7 @@ these routes, "me" is the whole point.
 """
 
 from app.core.db.database import query
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, ErrorCode
 
 
 def get_profile(user_id: str) -> dict:
@@ -94,7 +94,9 @@ def update_profile(user_id: str, fields: dict) -> dict:
         params_taken = (fields["username"], user_id)
         rows_taken = query(sql_taken, params_taken)
         if rows_taken[0]["exists"]:
-            raise ConflictError(f"username {fields['username']!r} is already taken")
+            raise ConflictError(
+                f"username {fields['username']!r} is already taken", ErrorCode.USERNAME_TAKEN
+            )
 
     columns = list(fields.keys())
     values = list(fields.values())

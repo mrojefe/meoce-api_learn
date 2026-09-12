@@ -12,7 +12,7 @@ not return an empty list — it returns everybody's rows.
 from uuid import UUID
 
 from app.core.db.database import query
-from app.core.errors import ConflictError, ForbiddenError, NotFoundError
+from app.core.errors import ConflictError, ErrorCode, ForbiddenError, NotFoundError
 from app.schemas.plans import PlanFeatures
 from app.services.instruments import get_instrument_id
 
@@ -267,7 +267,9 @@ def add_watchlist_symbol(user_id: str, watchlist_id: str, symbol: str) -> None:
     params_exists = (watchlist_id, instrument_id)
     rows_exists = query(sql_exists, params_exists)
     if rows_exists[0]["exists"]:
-        raise ConflictError(f"{symbol!r} is already in this watchlist")
+        raise ConflictError(
+            f"{symbol!r} is already in this watchlist", ErrorCode.SYMBOL_ALREADY_IN_WATCHLIST
+        )
 
     sql_next_order = """
         SELECT COALESCE(MAX(sort_order), 0) AS last_order

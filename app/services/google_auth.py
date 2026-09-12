@@ -65,7 +65,7 @@ from google.oauth2 import id_token as google_id_token
 
 from app.core.config import get_settings
 from app.core.db.database import query
-from app.core.errors import UnauthorizedError
+from app.core.errors import ErrorCode, UnauthorizedError
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
 from app.core.security.deps.rate_limit import check_rate_limit
@@ -121,11 +121,15 @@ def google_sign_in(id_token: str, request: Request) -> dict:
             id_token, google_requests.Request(), audience=get_settings().google_oauth_client_id,
         )
     except Exception as exc:
-        raise UnauthorizedError("invalid or expired Google credential") from exc
+        raise UnauthorizedError(
+            "invalid or expired Google credential", ErrorCode.GOOGLE_CREDENTIAL_INVALID
+        ) from exc
 
     email_verified = payload.get("email_verified", False)
     if not email_verified:
-        raise UnauthorizedError("this Google account's email is not verified")
+        raise UnauthorizedError(
+            "this Google account's email is not verified", ErrorCode.GOOGLE_EMAIL_NOT_VERIFIED
+        )
 
     user_id = _find_or_link_account(payload)
 

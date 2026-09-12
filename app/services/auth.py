@@ -177,7 +177,9 @@ def signup(email: str, password: str, request: Request) -> dict:
     )
 
     if _email_taken(email):
-        raise ConflictError(f"email {email!r} is already registered")
+        raise ConflictError(
+            f"email {email!r} is already registered", ErrorCode.EMAIL_ALREADY_REGISTERED
+        )
 
     sql = """
         INSERT INTO users (email, password_hash)
