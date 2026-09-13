@@ -18,15 +18,11 @@
 -- already active adds to what is left, it does not restart from now and
 -- waste the remainder, same principle as the subscription period extension.
 --
--- Granted VALUE depends on the feature's kind, read from features itself --
--- true for boolean-kind, features.purchase_grant_value (a real, bounded
--- integer, never null) for limit-kind. Requires migration
--- 20260913030000_add_purchase_grant_value_to_features.sql to already be
--- applied; a limit-kind feature with no purchase_grant_value set raises
--- rather than silently granting null/unlimited -- purchasing.py's own
--- price_addon_purchase()/create_custom_plan() already refuse this case in
--- Python before checkout ever starts, this is the same guarantee enforced
--- again at the point of actually crediting it.
+-- Granted VALUE depends on the feature's kind: true for boolean-kind,
+-- 999999 (same placeholder as app/services/purchasing.py's
+-- DEFAULT_LIMIT_GRANT_VALUE and migration 20260913040000's null rewrite)
+-- for limit-kind. Written straight into user_features' existing jsonb
+-- value column -- no separate catalog column needed for this, ever.
 
 CREATE OR REPLACE FUNCTION apply_payment_to_addon(
     p_payment_id uuid
@@ -59,18 +55,13 @@ BEGIN
         );
     END IF;
 
-    SELECT interval, interval_count, kind, purchase_grant_value INTO v_feature
+    SELECT interval, interval_count, kind INTO v_feature
     FROM features WHERE key = v_payment.addon_code;
 
     IF v_feature.kind = 'boolean' THEN
         v_granted_value := 'true'::jsonb;
     ELSE
-        IF v_feature.purchase_grant_value IS NULL THEN
-            RAISE EXCEPTION
-                'feature % has kind=limit but no purchase_grant_value -- not purchasable',
-                v_payment.addon_code;
-        END IF;
-        v_granted_value := v_feature.purchase_grant_value;
+        v_granted_value := to_jsonb(999999);
     END IF;
 
     v_extension := ((v_feature.interval_count * v_payment.periods_purchased)::text

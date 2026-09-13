@@ -1,13 +1,13 @@
 -- JF's direct instruction: stop using NULL/unlimited anywhere in
 -- plan_features/subscription_features/user_features -- every limit-kind
 -- feature must carry a real, bounded integer, never null. This replaces
--- the "null means unlimited" convention this schema used before, not just
--- adds a column for newly-purchased grants (that was
--- 20260913030000_add_purchase_grant_value_to_features.sql -- this
--- migration is the wider one: it rewrites EXISTING null values too).
+-- the "null means unlimited" convention this schema used before -- no new
+-- column anywhere, existing null values in these existing jsonb columns
+-- are simply rewritten to a real number.
 --
--- 999999 is the same placeholder sentinel used there -- a deliberately
--- large-but-finite number, not a tuned business value. JF should replace
+-- 999999 is the same placeholder sentinel app/services/purchasing.py's
+-- DEFAULT_LIMIT_GRANT_VALUE uses for a newly-purchased grant -- a
+-- deliberately large-but-finite number, not a tuned business value. JF should replace
 -- these with real per-feature/per-plan numbers whenever the actual caps
 -- are decided; this migration only removes null from the data, it does
 -- not claim 999999 is the right cap for anything.
