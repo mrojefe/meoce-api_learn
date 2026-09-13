@@ -45,24 +45,33 @@ def list_plans() -> list[Plan]:
 
 
 def list_features() -> list[dict]:
-    """Every active, purchasable feature (the addon picker's catalog).
+    """Every active, purchasable feature (the addon picker's catalog) --
+    boolean-kind and limit-kind alike.
 
-    Scoped to boolean-kind features only: `features` has no column stating
-    what value a *purchased* limit-kind feature should grant (buying
-    max_watchlists -- grant what number?). Only a boolean has one
-    unambiguous purchased value (true), so a limit-kind feature is not
-    purchasable until the schema gains a column for that -- not invented
-    here.
+    `plan_features.value`/`user_features.value` are jsonb; they already
+    store any value, proven by every existing limit-kind plan_features row
+    (e.g. plus/pro's max_watchlists=null). The real, narrower gap was never
+    "nowhere to store a purchased value" -- it was that nothing stated
+    *what number* a purchase should grant. Fixed by migration
+    20260913030000_add_purchase_grant_value_to_features.sql: a real,
+    bounded integer per limit-kind feature (never null/unlimited -- see
+    purchasing.create_custom_plan()/apply_payment_to_addon() for where it's
+    consumed).
 
     Returns:
         list[dict]: key, label, description, price_xof, interval,
-            interval_count -- everything the addon picker needs to display
-            and buy one.
+            interval_count, purchase_grant_value -- everything the addon
+            picker needs to display and buy one. purchase_grant_value is
+            always None here for a boolean-kind row (unused, the grant is
+            unambiguously true).
     """
     sql_features = """
-        SELECT key, label, description, price_xof, interval, interval_count
+        SELECT key, label, description, price_xof, interval, interval_count,
+               purchase_grant_value
         FROM features
-        WHERE is_active = true AND kind = 'boolean' AND price_xof > 0
+        WHERE is_active = true AND price_xof > 0
         ORDER BY display_order
         """
-    return query(sql_features)
+    rows = query(sql_features)
+
+    return rows

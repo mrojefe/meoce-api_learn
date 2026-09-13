@@ -67,9 +67,10 @@ def create_watchlist(
     in a JSONB column that only the browser ever read, which means it applied
     only to people who did not use curl.
 
-    `None` means unlimited, which is why the check reads the way it does: not
-    `count >= limit`, which would refuse everything when the limit is None, but
-    an explicit test for None first.
+    `entitlements.max_watchlists` is always a real, bounded int now --
+    PlanFeatures no longer has a None/unlimited case (migration
+    20260913040000 rewrote every unlimited plan to a real large number), so
+    the check below is the plain `count >= limit` it always should have been.
 
     Args:
         user_id (str): The authenticated caller, and the owner of the new row.
@@ -97,21 +98,20 @@ def create_watchlist(
     """
     limit = entitlements.max_watchlists
 
-    if limit is not None:
-        # Count, then insert — the same shape as the duplicate check we removed
-        # from create_instrument, and the same weakness: two requests can both
-        # count 1 against a limit of 2 and both insert. Unlike a symbol there is
-        # no unique constraint that could catch it, because two watchlists with
-        # the same name are legal. Closing it properly needs a per-user lock or
-        # a constraint the database can check. Noted, not solved here.
-        sql_count = "SELECT count(*) AS total FROM watchlists WHERE user_id = %s"
-        current_total = query(sql_count, (user_id,))[0]["total"]
+    # Count, then insert — the same shape as the duplicate check we removed
+    # from create_instrument, and the same weakness: two requests can both
+    # count 1 against a limit of 2 and both insert. Unlike a symbol there is
+    # no unique constraint that could catch it, because two watchlists with
+    # the same name are legal. Closing it properly needs a per-user lock or
+    # a constraint the database can check. Noted, not solved here.
+    sql_count = "SELECT count(*) AS total FROM watchlists WHERE user_id = %s"
+    current_total = query(sql_count, (user_id,))[0]["total"]
 
-        if current_total >= limit:
-            raise ForbiddenError(
-                f"Your plan allows {limit} watchlists and you have "
-                f"{current_total}. Upgrade to create more.",
-            )
+    if current_total >= limit:
+        raise ForbiddenError(
+            f"Your plan allows {limit} watchlists and you have "
+            f"{current_total}. Upgrade to create more.",
+        )
 
     sql_create = """
         INSERT INTO watchlists (user_id, name, description, is_public)

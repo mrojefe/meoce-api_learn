@@ -99,9 +99,9 @@ def test_no_unknown_feature_keys(plans):
     """No plan carries a key that Feature does not name.
 
     This is the test that catches the typo. A key spelled `max_watchlist`
-    instead of `max_watchlists` reads back as None, which the code treats as
-    *unlimited* — so without this test a single missing letter silently removes
-    a limit, with no error anywhere.
+    instead of `max_watchlists` would simply be dropped by PlanFeatures'
+    `extra="forbid"` validation with no error surfaced here -- so without
+    this test a single missing letter silently removes a limit.
     """
     known = {member.value for member in Feature}
     unknown = {k for p in plans for k in p["features"]} - known

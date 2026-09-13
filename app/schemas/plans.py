@@ -6,8 +6,9 @@ things a raw dict does not:
 
 * **a typo becomes an error.** `extra="forbid"` means `max_watchlist` (missing
   the s) is refused when the plan is read, instead of returning None from
-  `.get()` — and None is our convention for *unlimited*. Without this, one
-  missing letter silently removes a limit.
+  `.get()`, which this schema no longer treats as a meaningful value at all
+  (see PlanFeatures' own docstring -- limits are always a real, bounded int).
+  Without this, one missing letter silently removes a limit.
 * **types are checked.** A limit that arrives as `"2"` rather than `2` is caught
   here rather than three layers down, where it would compare wrong.
 * **the defaults are stated once**, so a plan that omits a key does not leave
@@ -31,17 +32,19 @@ class PlanFeatures(BaseModel):
 
         * **switches** — a bool. Default `False`: a feature nobody granted is not
         granted. Silence denies.
-        * **limits** — an int, or `None` meaning unlimited. Default `None`.
-
-        Note the asymmetry, because it is a trap: for a switch, "unspecified" means
-        *no*; for a limit, it means *unlimited*. The same silence is restrictive in
-        one case and permissive in the other. That is exactly how `multi_layout`,
-        defined only on the free plan, ended up denied on the paid ones — and why
-        every plan should state every key rather than relying on a default.
+        * **limits** — a real, bounded int. NEVER `None` -- this schema used to
+        treat a missing limit as "unlimited" (silence permitted), which was the
+        opposite trap from a switch's silence (silence denies): the same
+        missing-value case meant two contradictory things depending on which
+        kind of field it was. Migration 20260913040000 rewrote every existing
+        null limit in the database to a real number; this schema now matches
+        that -- a limit is always some concrete int, and "how large" is a
+        product decision made in the data, not a type-level escape hatch.
 
         Every active plan now states every key explicitly, enforced by
-        `tests/test_reference_data.py`. The defaults above are a safety net for a
-        plan created later and left incomplete, not something to rely on.
+        `tests/test_reference_data.py`. The defaults above (switches only, now
+        that limits have none) are a safety net for a plan created later and
+        left incomplete, not something to rely on.
     """
 
     model_config = {"extra": "forbid"}
@@ -83,66 +86,66 @@ class PlanFeatures(BaseModel):
         examples=[False],
     )] 
 
-    # ── limits: an int, or None meaning unlimited. Silence PERMITS. ──────────
-    max_watchlists: Annotated[int | None, Field(
+    # ── limits: a real, bounded int. NEVER None -- no default, always stated. ──
+    max_watchlists: Annotated[int, Field(
         ge=0,
         description="How many watchlists may exist. Rows in our database.",
         examples=[2],
     )] 
 
-    max_real_portfolios: Annotated[int | None, Field(
+    max_real_portfolios: Annotated[int, Field(
         ge=0,
         description="Portfolios holding real positions. Note the live data has "
                     "free=2 and plus=1 — a paying user below a free one.",
         examples=[2],
     )] 
 
-    max_virtual_portfolios: Annotated[int | None, Field(
+    max_virtual_portfolios: Annotated[int, Field(
         ge=0,
         description="Paper-trading portfolios.",
         examples=[2],
     )] 
 
-    max_news_bookmarks: Annotated[int | None, Field(
+    max_news_bookmarks: Annotated[int, Field(
         ge=0,
         description="Saved articles. Rows in our database.",
         examples=[5],
     )] 
 
-    max_flags: Annotated[int | None, Field(
+    max_flags: Annotated[int, Field(
         ge=0,
         description="Coloured flags on instruments, stored in "
                     "user_instrument_flags and written through PUT /flags/{symbol}.",
         examples=[1],
     )] 
 
-    max_alerts_active: Annotated[int | None, Field(
+    max_alerts_active: Annotated[int, Field(
         ge=0,
         description="Alerts running at once. They execute on our server, so "
                     "each one costs us continuously.",
         examples=[2],
     )] 
 
-    max_alerts_month: Annotated[int | None, Field(
+    max_alerts_month: Annotated[int, Field(
         ge=0,
         description="Alerts that may fire within a calendar month.",
         examples=[10],
     )] 
 
-    max_alerts_email_active: Annotated[int | None, Field(
+    max_alerts_email_active: Annotated[int, Field(
         ge=0,
         description="Active email alerts. We pay to send.",
         examples=[5],
     )] 
 
-    max_alerts_whatsapp_active: Annotated[int | None, Field(
+    max_alerts_whatsapp_active: Annotated[int, Field(
         ge=0,
         description="Active WhatsApp alerts. Billed per message — the most "
                     "expensive limit to leave unenforced.",
         examples=[3],
     )] 
 
-    max_chart_panes: Annotated[int | None, Field(
+    max_chart_panes: Annotated[int, Field(
         ge=0,
         description="Chart panels on screen. The arrangement is the browser's "
                     "business, but each pane costs one history fetch, so what "
@@ -150,33 +153,33 @@ class PlanFeatures(BaseModel):
         examples=[1],
     )] 
 
-    max_indicators_on_chart: Annotated[int | None, Field(
+    max_indicators_on_chart: Annotated[int, Field(
         ge=0,
         description="Indicators per chart. Computed in the browser over data "
                     "already sent, so genuinely the frontend's to enforce.",
         examples=[2],
     )] 
 
-    max_custom_timeframes: Annotated[int | None, Field(
+    max_custom_timeframes: Annotated[int, Field(
         ge=0,
         description="How many custom timeframes may be saved.",
         examples=[0],
     )] 
 
-    max_screener_saves: Annotated[int | None, Field(
+    max_screener_saves: Annotated[int, Field(
         ge=0,
         description="Saved screener filters.",
         examples=[2],
     )] 
 
-    history_years_max: Annotated[int | None, Field(
+    history_years_max: Annotated[int, Field(
         ge=0,
         description="How far back daily history may be requested. Decides what "
                     "data leaves our server — the most valuable limit we have.",
         examples=[3],
     )] 
 
-    live_history_days: Annotated[int | None, Field(
+    live_history_days: Annotated[int, Field(
         ge=0,
         description="Days of intraday history reachable.",
         examples=[5],

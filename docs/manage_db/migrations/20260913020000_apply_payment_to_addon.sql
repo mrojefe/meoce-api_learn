@@ -3,7 +3,7 @@
 -- path that did not exist before this pass.
 --
 -- REVIEW: this function is the actual money-crediting logic -- please read it.
--- Called from app/services/billing.py's _credit_addon(), same trust
+-- Called from app/services/purchasing.py's _credit_addon(), same trust
 -- boundary as apply_payment_to_subscription(): only called after the
 -- payment's status has been confirmed against GeniusPay itself.
 --
@@ -17,6 +17,16 @@
 -- plus this purchase's duration -- buying more time while an addon is
 -- already active adds to what is left, it does not restart from now and
 -- waste the remainder, same principle as the subscription period extension.
+--
+-- Granted VALUE depends on the feature's kind, read from features itself --
+-- true for boolean-kind, features.purchase_grant_value (a real, bounded
+-- integer, never null) for limit-kind. Requires migration
+-- 20260913030000_add_purchase_grant_value_to_features.sql to already be
+-- applied; a limit-kind feature with no purchase_grant_value set raises
+-- rather than silently granting null/unlimited -- purchasing.py's own
+-- price_addon_purchase()/create_custom_plan() already refuse this case in
+-- Python before checkout ever starts, this is the same guarantee enforced
+-- again at the point of actually crediting it.
 
 CREATE OR REPLACE FUNCTION apply_payment_to_addon(
     p_payment_id uuid
@@ -28,6 +38,7 @@ DECLARE
     v_rows_updated integer;
     v_feature record;
     v_extension interval;
+    v_granted_value jsonb;
     v_existing_expires_at timestamptz;
     v_new_expires_at timestamptz;
 BEGIN
@@ -48,8 +59,19 @@ BEGIN
         );
     END IF;
 
-    SELECT interval, interval_count INTO v_feature
+    SELECT interval, interval_count, kind, purchase_grant_value INTO v_feature
     FROM features WHERE key = v_payment.addon_code;
+
+    IF v_feature.kind = 'boolean' THEN
+        v_granted_value := 'true'::jsonb;
+    ELSE
+        IF v_feature.purchase_grant_value IS NULL THEN
+            RAISE EXCEPTION
+                'feature % has kind=limit but no purchase_grant_value -- not purchasable',
+                v_payment.addon_code;
+        END IF;
+        v_granted_value := v_feature.purchase_grant_value;
+    END IF;
 
     v_extension := ((v_feature.interval_count * v_payment.periods_purchased)::text
         || ' ' || (CASE WHEN v_feature.interval = 'week' THEN 'weeks' ELSE 'months' END))::interval;
@@ -64,10 +86,11 @@ BEGIN
     v_new_expires_at := GREATEST(now(), COALESCE(v_existing_expires_at, now())) + v_extension;
 
     INSERT INTO user_features (account_id, feature_key, source, value, source_ref, granted_at, expires_at)
-    VALUES (v_payment.account_id, v_payment.addon_code, 'addon', 'true'::jsonb,
+    VALUES (v_payment.account_id, v_payment.addon_code, 'addon', v_granted_value,
             p_payment_id::text, now(), v_new_expires_at)
     ON CONFLICT (account_id, feature_key, source) DO UPDATE
-        SET expires_at = v_new_expires_at,
+        SET value = v_granted_value,
+            expires_at = v_new_expires_at,
             source_ref = p_payment_id::text,
             updated_at = now();
 
@@ -75,6 +98,7 @@ BEGIN
         'applied', true,
         'account_id', v_payment.account_id,
         'feature_key', v_payment.addon_code,
+        'value', v_granted_value,
         'expires_at', v_new_expires_at
     );
 END;

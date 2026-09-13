@@ -72,10 +72,13 @@ def price_addon_purchase(feature_key: str, periods_purchased: int) -> dict:
     """Looks up a feature's real price and validates it is purchasable as a
     standalone addon.
 
+    Boolean-kind and limit-kind features are both purchasable: what
+    apply_payment_to_addon() grants differs by kind (true for a boolean,
+    features.purchase_grant_value -- a real, bounded integer, never null --
+    for a limit-kind one), but pricing a purchase doesn't depend on which.
+
     Args:
-        feature_key (str): Must be an active, priced, boolean-kind feature --
-            a limit-kind feature has no unambiguous purchased value (what
-            number would it grant?), so it is not purchasable here.
+        feature_key (str): Must be an active, priced feature.
         periods_purchased (int): How many of the feature's own interval to
             buy.
 
@@ -89,7 +92,7 @@ def price_addon_purchase(feature_key: str, periods_purchased: int) -> dict:
     """
     sql_feature = """
         SELECT price_xof, label, interval, interval_count
-        FROM features WHERE key = %s AND is_active = true AND kind = 'boolean' AND price_xof > 0
+        FROM features WHERE key = %s AND is_active = true AND price_xof > 0
         """
     params_feature = (feature_key,)
     feature_rows = query(sql_feature, params_feature)
@@ -190,24 +193,30 @@ def create_custom_plan(user_id: str, feature_keys: list[str]) -> str:
     returned plan_code is then bought like any other plan, via
     checkout_plan().
 
-    Scoped to boolean-kind features only -- same reasoning as
-    price_addon_purchase(): a limit-kind feature has no single purchased
-    value to grant.
+    Any active, priced feature may be picked -- a boolean-kind feature's
+    plan_features row gets value=true; a limit-kind one gets
+    features.purchase_grant_value, a real, bounded integer the catalog
+    states for exactly this purpose (added by migration
+    20260913030000_add_purchase_grant_value_to_features.sql) -- never null.
+    NULL means unlimited elsewhere in this schema (whole-plan grants), which
+    is deliberately NOT what a single purchased feature should hand out.
 
     Args:
         user_id (str): The authenticated caller -- becomes owner_account_id.
         feature_keys (list[str]): Must be non-empty, every key must exist,
-            be active, boolean-kind, and priced.
+            be active, and priced. Any limit-kind key among them must also
+            have a purchase_grant_value set in the catalog.
 
     Returns:
         str: The new plan's code (e.g. "custom_a1b2c3d4e5f6").
 
     Raises:
         ApiError: VALIDATION if feature_keys is empty, contains an unknown/
-            inactive/non-boolean/unpriced key, or the chosen features don't
-            share one interval/interval_count -- summing across different
-            intervals would silently produce a wrong total, so this refuses
-            instead of guessing.
+            inactive/unpriced key, a limit-kind key missing
+            purchase_grant_value, or the chosen features don't share one
+            interval/interval_count -- summing across different intervals
+            would silently produce a wrong total, so this refuses instead
+            of guessing.
     """
     unique_keys = list(dict.fromkeys(feature_keys))
     if not unique_keys:
@@ -215,9 +224,9 @@ def create_custom_plan(user_id: str, feature_keys: list[str]) -> str:
                         ErrorStatus.UNPROCESSABLE_ENTITY)
 
     sql_features = """
-        SELECT key, price_xof, interval, interval_count
+        SELECT key, kind, price_xof, interval, interval_count, purchase_grant_value
         FROM features
-        WHERE key = ANY(%s) AND is_active = true AND kind = 'boolean' AND price_xof > 0
+        WHERE key = ANY(%s) AND is_active = true AND price_xof > 0
         """
     params_features = (unique_keys,)
     feature_rows = query(sql_features, params_features)
@@ -227,7 +236,7 @@ def create_custom_plan(user_id: str, feature_keys: list[str]) -> str:
     if missing_keys:
         raise ApiError(
             ErrorCode.VALIDATION,
-            f"not purchasable, unknown, or not boolean-kind: {sorted(missing_keys)}",
+            f"not purchasable, unknown, or inactive: {sorted(missing_keys)}",
             ErrorStatus.UNPROCESSABLE_ENTITY,
         )
 
@@ -240,6 +249,25 @@ def create_custom_plan(user_id: str, feature_keys: list[str]) -> str:
             ErrorStatus.UNPROCESSABLE_ENTITY,
         )
     interval, interval_count = intervals.pop()
+
+    # NOTE: boolean-kind -> true; limit-kind -> the catalog's own
+    # purchase_grant_value -- a real bounded number, never null/unlimited
+    # (see the column comment on features.purchase_grant_value). Checked
+    # before opening the transaction below -- invalid input should not
+    # start a write at all, not rely on the rollback to undo one.
+    granted_values = {}
+    for row in feature_rows:
+        if row["kind"] == "boolean":
+            granted_values[row["key"]] = True
+        else:
+            if row["purchase_grant_value"] is None:
+                raise ApiError(
+                    ErrorCode.VALIDATION,
+                    f"{row['key']!r} has no purchase_grant_value set -- "
+                    "not purchasable until the catalog states one",
+                    ErrorStatus.UNPROCESSABLE_ENTITY,
+                )
+            granted_values[row["key"]] = row["purchase_grant_value"]
 
     total_price_xof = sum(row["price_xof"] for row in feature_rows)
     plan_code = f"custom_{secrets.token_hex(6)}"
@@ -258,8 +286,8 @@ def create_custom_plan(user_id: str, feature_keys: list[str]) -> str:
             INSERT INTO plan_features (plan_code, feature_key, value)
             VALUES (%s, %s, %s)
             """
-        for feature_key in found_keys:
-            params_insert_features = (plan_code, feature_key, Jsonb(True))
+        for feature_key, granted_value in granted_values.items():
+            params_insert_features = (plan_code, feature_key, Jsonb(granted_value))
             conn.execute(sql_insert_features, params_insert_features)
 
     return plan_code

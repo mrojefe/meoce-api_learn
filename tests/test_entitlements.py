@@ -63,7 +63,7 @@ def test_resolve_entitlements_uses_a_real_active_subscription(existing_account):
     result = resolve_entitlements(existing_account)
 
     assert result.custom_timeframes is True
-    assert result.history_years_max is None  # premium: unlimited
+    assert result.history_years_max == 999999  # premium: no real cap, migrated off null/unlimited
 
 
 def test_resolve_entitlements_grant_overrides_the_plan_value(existing_account):
