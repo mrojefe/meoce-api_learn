@@ -24,15 +24,21 @@ def create_account_with_identity(sql_identity: str, params_identity_rest: tuple)
 
     Args:
         sql_identity (str): The INSERT INTO user_identities statement for
-            this provider. Its first placeholder must be account_id --
-            this function supplies that value itself, from the accounts
-            insert that runs immediately before it.
+            this provider. Its first placeholder must be account_id (the
+            column user_identities.account_id) -- this function supplies
+            that value itself, from the accounts insert that runs
+            immediately before it.
         params_identity_rest (tuple): Every value sql_identity needs
             *after* account_id, in placeholder order -- e.g. for the
             'email' provider, (email, hashed_password).
 
     Returns:
-        str: The new account's id.
+        str: The new account's id. Named user_id, not account_id, to
+            match how every caller already refers to it -- account_id is
+            the SQL column name (user_identities.account_id), not the
+            convention this codebase uses for the Python variable holding
+            it (user_id, used everywhere else: JWT payloads, watchlists,
+            preferences, entitlements...).
 
     Examples:
         >>> sql_identity = (
@@ -41,18 +47,18 @@ def create_account_with_identity(sql_identity: str, params_identity_rest: tuple)
         ...     "VALUES (%s, 'email', %s, %s, false)"
         ... )
         >>> params_identity_rest = (email, hash_password(password))
-        >>> account_id = create_account_with_identity(sql_identity, params_identity_rest)
+        >>> user_id = create_account_with_identity(sql_identity, params_identity_rest)
     """
     sql_accounts = "INSERT INTO accounts DEFAULT VALUES RETURNING id"
     sql_profile = "INSERT INTO user_profiles (id) VALUES (%s)"
 
     with transaction() as conn:
-        account_id = str(conn.execute(sql_accounts).fetchone()["id"])
+        user_id = str(conn.execute(sql_accounts).fetchone()["id"])
 
-        params_identity = (account_id, *params_identity_rest)
+        params_identity = (user_id, *params_identity_rest)
         conn.execute(sql_identity, params_identity)
 
-        params_profile = (account_id,)
+        params_profile = (user_id,)
         conn.execute(sql_profile, params_profile)
 
-    return account_id
+    return user_id

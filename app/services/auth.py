@@ -194,10 +194,10 @@ def signup(email: str, password: str, request: Request) -> dict:
         VALUES (%s, 'email', %s, %s, false)
         """
     params_identity_rest = (email, hash_password(password))
-    account_id = create_account_with_identity(sql_identity, params_identity_rest)
+    user_id = create_account_with_identity(sql_identity, params_identity_rest)
 
-    result = {"id": account_id, "email": email}
-    _send_verification(str(account_id), email)
+    result = {"id": user_id, "email": email}
+    _send_verification(str(user_id), email)
 
     return result
 
@@ -228,13 +228,13 @@ def resend_verification(email: str, request: Request) -> None:
         "too many resend attempts, try again later",
     )
 
-    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
+    sql = "SELECT account_id AS user_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
     if not rows:
         return
 
-    _send_verification(str(rows[0]["account_id"]), email)
+    _send_verification(str(rows[0]["user_id"]), email)
 
 
 def verify_email(token: str) -> bool:
@@ -288,13 +288,13 @@ def request_password_reset(email: str, request: Request) -> None:
         "too many password reset attempts, try again later",
     )
 
-    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
+    sql = "SELECT account_id AS user_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
     if not rows:
         return
 
-    user_id = str(rows[0]["account_id"])
+    user_id = str(rows[0]["user_id"])
 
     token = generate_password_reset_token()
     store_password_reset_token(token, user_id)
@@ -366,7 +366,7 @@ def _get_user_id_by_email(email: str) -> str:
     Called only after `verify_password_match` succeeds, so the row is
     guaranteed to be there — this never needs its own not-found handling.
     """
-    sql = "SELECT account_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
+    sql = "SELECT account_id AS user_id FROM user_identities WHERE provider = 'email' AND provider_uid = %s"
     rows = query(sql, (email,))
 
-    return str(rows[0]["account_id"])
+    return str(rows[0]["user_id"])

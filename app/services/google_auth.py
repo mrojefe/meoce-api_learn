@@ -167,12 +167,12 @@ def _find_or_link_account(payload: dict) -> str:
     # NOTE: identity schema is user_identities (one row per login method),
     # not a flat users table with a single auth_provider column -- "found
     # by google_sub" means a 'google' identity row already exists.
-    sql_1 = "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s"
+    sql_1 = "SELECT account_id AS user_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s"
     params_1 = (google_sub,)
     rows = query(sql_1, params_1)
 
     if rows:
-        user_id = str(rows[0]["account_id"])
+        user_id = str(rows[0]["user_id"])
         _resync_google_fields(user_id, payload)
         return user_id
 
@@ -184,7 +184,7 @@ def _find_or_link_account(payload: dict) -> str:
     # longer reachable -- there is nothing to match against. Flagged to JF,
     # not silently dropped.
     sql_2 = (
-        "SELECT account_id, verified, credential FROM user_identities "
+        "SELECT account_id AS user_id, verified, credential FROM user_identities "
         "WHERE provider = 'email' AND provider_uid = %s"
     )
     params_2 = (payload["email"],)
@@ -193,7 +193,7 @@ def _find_or_link_account(payload: dict) -> str:
     if not rows:
         return _create_google_account(payload)
 
-    user_id = str(rows[0]["account_id"])
+    user_id = str(rows[0]["user_id"])
 
     # Google's own verification is authoritative (see module docstring):
     # link a new 'google' identity onto this account, and clear the email

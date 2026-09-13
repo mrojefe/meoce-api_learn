@@ -296,12 +296,12 @@ def _confirm_signup(phone: str) -> dict:
     # NOTE: identity schema is user_identities (one row per login method),
     # not a flat users.phone column -- provider='whatsapp' rows are keyed
     # by phone as provider_uid.
-    sql_lookup = "SELECT account_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s"
+    sql_lookup = "SELECT account_id AS user_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s"
     params_lookup = (phone,)
     rows = query(sql_lookup, params_lookup)
 
     if rows:
-        user_id = str(rows[0]["account_id"])
+        user_id = str(rows[0]["user_id"])
     else:
         # create_account_with_identity() creates accounts + the whatsapp
         # identity + user_profiles atomically (see
