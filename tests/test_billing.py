@@ -9,6 +9,11 @@ idempotency dedupe, the amount_xof formula, custom-plan creation, and the
 anti-downgrade check -- is exactly the part this codebase newly wrote; the
 provider call itself is proven separately (app/services/payment_provider.py
 is a thin, directly-verified wire client).
+
+checkout_plan()/checkout_addon()/create_custom_plan() now live in
+app/services/purchasing.py (pricing/domain logic), not billing.py (the
+payment mechanic) -- billing.create_checkout() is what they call underneath,
+already covered indirectly by every test here that reaches GeniusPay.
 """
 
 from unittest.mock import patch
@@ -17,8 +22,8 @@ import pytest
 
 from app.core.db.database import query
 from app.core.errors import ApiError, ConflictError
-from app.services.billing import checkout_addon, checkout_plan, create_custom_plan
 from app.services.plans import list_features, list_plans
+from app.services.purchasing import checkout_addon, checkout_plan, create_custom_plan
 
 FAKE_PROVIDER_RESULT = {
     "reference": "SANDBOX-TEST-REF",

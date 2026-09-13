@@ -1,5 +1,6 @@
-"""Billing routes -- HTTP only. The work happens in the service. Money-moving
-endpoints only -- the plan/feature catalog lives in app/api/v1/plans.py."""
+"""Billing routes -- HTTP only. Checkout/custom-plan work happens in
+purchasing.py (what a purchase means); webhook/reconcile work happens in
+billing.py (the payment mechanic itself)."""
 
 from typing import Annotated
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 
 from app.core.security.deps import get_current_user_id, require_api_key
 from app.schemas.common import Envelope, ErrorEnvelope, envelope_
-from app.services import billing
+from app.services import billing, purchasing
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -29,7 +30,7 @@ def checkout_plan(payload: dict, user_id: Annotated[str, Depends(get_current_use
     Returns:
         dict: {"data": {"checkout_url": ..., "reference": ..., "status": ...}}.
     """
-    result = billing.checkout_plan(
+    result = purchasing.checkout_plan(
         user_id=user_id,
         plan_code=payload["plan_code"],
         periods_purchased=payload["periods_purchased"],
@@ -54,7 +55,7 @@ def checkout_addon(payload: dict, user_id: Annotated[str, Depends(get_current_us
     Returns:
         dict: {"data": {"checkout_url": ..., "reference": ..., "status": ...}}.
     """
-    result = billing.checkout_addon(
+    result = purchasing.checkout_addon(
         user_id=user_id,
         feature_key=payload["feature_key"],
         periods_purchased=payload["periods_purchased"],
@@ -79,7 +80,7 @@ def create_custom_plan(payload: dict, user_id: Annotated[str, Depends(get_curren
     Returns:
         dict: {"data": {"plan_code": "custom_..."}}.
     """
-    plan_code = billing.create_custom_plan(user_id=user_id, feature_keys=payload["feature_keys"])
+    plan_code = purchasing.create_custom_plan(user_id=user_id, feature_keys=payload["feature_keys"])
     return envelope_(data={"plan_code": plan_code})
 
 
