@@ -1,4 +1,5 @@
-"""Shapes shared by every endpoint: the envelopes, the meta block, Symbol.
+"""Shapes shared by every endpoint: the envelopes, the meta block, Symbol,
+Phone.
 
 Success and failure each have exactly one shape here, so a client writes one
 unwrapping function instead of one per endpoint.
@@ -7,6 +8,7 @@ import re
 from typing import Annotated, Any, Generic, TypeVar
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, Field
+from pydantic_extra_types.phone_numbers import PhoneNumberValidator
 
 Symbol = Annotated[
     str,
@@ -22,6 +24,26 @@ it grows every time an instrument is listed, so an enum frozen at startup would
 reject a symbol this very API had just created - until a restart. A pattern
 describes the shape of a valid symbol without claiming to know every one that
 exists. Enums are for closed sets: the types, the sectors.
+"""
+
+
+Phone = Annotated[
+    str,
+    PhoneNumberValidator(number_format="E164", default_region="CI"),
+    AfterValidator(lambda v: v.lstrip("+")),
+]
+"""A real, parseable phone number -- validated by the `phonenumbers` library
+(https://pydantic.dev/docs/validation/latest/api/pydantic-extra-types/pydantic_extra_types_phone_numbers/),
+not a bare `str`. A route that declares `phone: str` accepts literally any
+text -- "not a phone", empty, whatever -- and the first place that would ever
+notice is a failed WAHA call three layers down. This type rejects garbage at
+the boundary (422, before any service code runs) and normalises whatever
+shape it accepts ("+225...", "225...", a local "07...") to this codebase's
+existing convention: digits only, no leading `+` (matches every WAHA call
+already in whatsapp.py and every docstring example, e.g. "2250767386180").
+`default_region="CI"` lets a caller give a local Ivorian number without a
+country code; a number with an explicit country code parses regardless of
+this default.
 """
 
 

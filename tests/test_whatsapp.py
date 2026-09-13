@@ -15,10 +15,11 @@ import pytest
 
 from app.core.db.database import query
 from app.core.db.redis import get_redis
-from app.core.errors import ConflictError, RateLimitError
-from app.services.whatsapp_auth import (
+from app.core.errors import ApiError, ConflictError, RateLimitError
+from app.services.whatsapp import (
     check_whatsapp_exists,
     check_whatsapp_status,
+    send_message,
     start_whatsapp_attach,
     start_whatsapp_signup,
 )
@@ -90,7 +91,7 @@ def test_start_whatsapp_signup_returns_a_six_digit_code(fake_request):
 def test_status_is_pending_before_any_message(fake_request):
     result = start_whatsapp_signup(fake_request)
 
-    with patch("app.services.whatsapp_auth.httpx.get", side_effect=_mock_waha(messages=[])):
+    with patch("app.services.whatsapp.httpx.get", side_effect=_mock_waha(messages=[])):
         status = check_whatsapp_status(result["code"])
 
     assert status == {"status": "pending"}
@@ -112,7 +113,7 @@ def test_status_confirms_a_new_signup_on_a_matching_message(fake_request):
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[matching_message]),
     ):
         status = check_whatsapp_status(result["code"])
@@ -149,7 +150,7 @@ def test_status_logs_into_an_existing_phone_without_duplicating_it(fake_request)
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[matching_message]),
     ):
         status = check_whatsapp_status(result["code"])
@@ -178,7 +179,7 @@ def test_status_ignores_a_message_sent_before_the_code_was_issued(fake_request):
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[stale_message]),
     ):
         status = check_whatsapp_status(result["code"])
@@ -197,7 +198,7 @@ def test_status_ignores_outbound_messages(fake_request):
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[outbound_message]),
     ):
         status = check_whatsapp_status(result["code"])
@@ -225,7 +226,7 @@ def test_attach_succeeds_for_an_authenticated_user(fake_request):
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[matching_message]),
     ):
         status = check_whatsapp_status(result["code"])
@@ -271,7 +272,7 @@ def test_attach_rejects_a_phone_already_claimed_by_another_account(fake_request)
     }
 
     with patch(
-        "app.services.whatsapp_auth.httpx.get",
+        "app.services.whatsapp.httpx.get",
         side_effect=_mock_waha(messages=[matching_message]),
     ), pytest.raises(ConflictError):
         check_whatsapp_status(result["code"])
@@ -306,7 +307,7 @@ def test_check_whatsapp_exists_true(fake_request):
     mock_response.json.return_value = {"numberExists": True, "chatId": "2250767386180@c.us"}
     mock_response.raise_for_status.return_value = None
 
-    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+    with patch("app.services.whatsapp.httpx.get", return_value=mock_response):
         assert check_whatsapp_exists("2250767386180", fake_request) is True
 
 
@@ -315,7 +316,7 @@ def test_check_whatsapp_exists_false(fake_request):
     mock_response.json.return_value = {"numberExists": False, "chatId": None}
     mock_response.raise_for_status.return_value = None
 
-    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+    with patch("app.services.whatsapp.httpx.get", return_value=mock_response):
         assert check_whatsapp_exists("0000000000", fake_request) is False
 
 
@@ -324,9 +325,69 @@ def test_check_whatsapp_exists_is_rate_limited(fake_request):
     mock_response.json.return_value = {"numberExists": True, "chatId": "x@c.us"}
     mock_response.raise_for_status.return_value = None
 
-    with patch("app.services.whatsapp_auth.httpx.get", return_value=mock_response):
+    with patch("app.services.whatsapp.httpx.get", return_value=mock_response):
         for _ in range(20):
             check_whatsapp_exists("2250767386180", fake_request)
 
         with pytest.raises(RateLimitError):
             check_whatsapp_exists("2250767386180", fake_request)
+
+
+def test_send_message_refuses_without_a_verified_whatsapp_identity():
+    """No user_identities row at all -- the structural gate, not a trust-the-
+    caller check, refuses before any WAHA call is even attempted."""
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
+
+    try:
+        with pytest.raises(ApiError):
+            send_message(account_id, "hello")
+    finally:
+        query("DELETE FROM accounts WHERE id = %s", (account_id,), nothing_return=True)
+
+
+def test_send_message_refuses_an_unverified_whatsapp_identity():
+    """A whatsapp identity row exists but verified=false (never confirmed by
+    an inbound message) -- still refused, same as having none at all."""
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
+    sql = """
+        INSERT INTO user_identities (account_id, provider, provider_uid, verified)
+        VALUES (%s, 'whatsapp', '2250700000000', false)
+        """
+    query(sql, (account_id,), nothing_return=True)
+
+    try:
+        with pytest.raises(ApiError):
+            send_message(account_id, "hello")
+    finally:
+        query("DELETE FROM accounts WHERE id = %s", (account_id,), nothing_return=True)
+
+
+def test_send_message_sends_to_a_verified_contact():
+    """A verified=true whatsapp identity -- the account already texted
+    MEOCE first (that's the only way verified ever becomes true) -- is
+    allowed through to WAHA."""
+    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
+    sql = """
+        INSERT INTO user_identities (account_id, provider, provider_uid, verified)
+        VALUES (%s, 'whatsapp', '2250700000001', true)
+        """
+    query(sql, (account_id,), nothing_return=True)
+
+    check_response = Mock()
+    check_response.json.return_value = {"chatId": "2250700000001@c.us"}
+    check_response.raise_for_status.return_value = None
+
+    send_response = Mock()
+    send_response.json.return_value = {"id": "waha-msg-1"}
+    send_response.raise_for_status.return_value = None
+
+    try:
+        with patch("app.services.whatsapp.httpx.get", return_value=check_response), \
+             patch("app.services.whatsapp.httpx.post", return_value=send_response) as mock_post:
+            message_id = send_message(account_id, "hello")
+
+        assert message_id == "waha-msg-1"
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["json"]["chatId"] == "2250700000001@c.us"
+    finally:
+        query("DELETE FROM accounts WHERE id = %s", (account_id,), nothing_return=True)

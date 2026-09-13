@@ -11,7 +11,7 @@ A 6-digit code, not a 32-byte hex token like the other two: unlike an email
 link, a human has to *type* this into WhatsApp themselves (`MEOCE-123456`),
 so it has to stay short enough to type without a copy-paste. That shrinks
 the guess space enormously compared to the other tokens, which is exactly
-why `check_whatsapp_status` (in `app/services/whatsapp_auth.py`) rate-limits
+why `check_whatsapp_status` (in `app/services/whatsapp.py`) rate-limits
 by the code itself, tightly — the length tradeoff is deliberate, not an
 oversight, and the rate limit is what keeps it safe.
 """

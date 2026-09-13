@@ -229,7 +229,7 @@ def _create_google_account(payload: dict) -> str:
     users table, there is no mirror trigger auto-creating user_profiles
     here. create_account_with_identity() creates all three rows
     atomically (see app/services/identity.py) -- same helper
-    auth.py's signup() and whatsapp_auth.py's _confirm_signup() use, only
+    auth.py's signup() and whatsapp.py's _confirm_signup() use, only
     the identity INSERT differs per provider.
 
     Args:

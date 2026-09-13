@@ -1,20 +1,22 @@
-"""WhatsApp sign-in/attach — a third, independent way to reach an account.
+"""WhatsApp — sign-in/attach, AND sending a message to an already-known
+contact. Everything this codebase does with WAHA (this project's WhatsApp
+bridge) that isn't the payment/alert-sending zone lives here; renamed from
+`whatsapp_auth.py` once `send_message()` below made "auth" too narrow a name.
 
 Kept apart from `auth.py` and `google_auth.py`, same reasoning as
 `google_auth.py`'s own module docstring: each provider is its own file so a
 provider-specific policy never has to be threaded as a branch through code
 that mostly belongs to a different provider.
 
-**The "inverted" flow — why this never messages first:** WhatsApp Business
-API access aggressively bans numbers that message people who never opted
-in, and a backend that texts a stranger first because they typed their
+**The "inverted" flow — why signup/attach never messages first:** WhatsApp
+Business API access aggressively bans numbers that message people who never
+opted in, and a backend that texts a stranger first because they typed their
 phone number into a signup form is exactly that pattern. The real app
-already solved this the other way around: MEOCE never initiates contact.
-Instead, a short code is generated and shown to the user in the app; *they*
-open WhatsApp themselves and text `MEOCE-<code>` to MEOCE's own number; the
-frontend polls `GET /auth/whatsapp/status` until that inbound message shows
-up. WAHA (this project's WhatsApp bridge) never receives an outbound
-message as part of this flow — only reads of the chat it already owns.
+already solved this the other way around: MEOCE never initiates contact
+during signup. Instead, a short code is generated and shown to the user in
+the app; *they* open WhatsApp themselves and text `MEOCE-<code>` to MEOCE's
+own number; the frontend polls `GET /auth/whatsapp/status` until that
+inbound message shows up.
 
 **Polling, not a webhook — decided, not defaulted:** a webhook receiver
 would need its own inbound endpoint, sender verification, and retry/
@@ -37,17 +39,21 @@ an authenticated session, so it is purely additive — it sets `phone`/
 This mirrors the table in the project's account-linking plan: WhatsApp
 attach behaves like the "password/google -> whatsapp attach" row, always
 additive, session-scoped, never a `auth_provider` flip.
-"""
 
-# WHATSAPP ANTI-BAN: never call sendText here. This module only reads
-# incoming messages the user sent to us first — WAHA/WhatsApp bans numbers
-# that message unknown contacts unprompted. Every WAHA call in this file is
-# a GET (`check-exists`, `messages`); there is no code path anywhere below
-# that calls `POST /api/sendText`, and none should ever be added — not even
-# a "welcome"/confirmation text after a successful signup or attach. The
-# user messaging us first does not license us replying automatically; the
-# real app doesn't do that either, and this module deliberately doesn't
-# invent it.
+**send_message() and the anti-ban rule, revised:** the original version of
+this module refused to call `sendText` at all, anywhere, ever — including a
+post-signup "welcome" text — because WAHA/WhatsApp bans numbers that message
+contacts who never opted in. That rule is still the reason send_message()
+exists in this exact shape: it is NOT "send to any phone the caller names."
+It looks up the account's `user_identities` row for provider='whatsapp' and
+refuses unless `verified = true` — and `verified` only ever becomes true
+after this account's own inbound confirmation message was matched (see
+`_confirm_signup`/`_confirm_attach` below). So the gate is structural, not a
+trust-the-caller convention: send_message() cannot reach a number that has
+never messaged MEOCE first, because no such number has a verified=true row
+to look up. Every other WAHA call in this file besides send_message() is
+still a GET (`check-exists`, `messages`).
+"""
 
 import re
 import time
@@ -57,7 +63,7 @@ from fastapi import Request
 
 from app.core.config import get_settings
 from app.core.db.database import query
-from app.core.errors import ConflictError, ErrorCode
+from app.core.errors import ApiError, ConflictError, ErrorCode, ErrorStatus
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
 from app.core.security.deps.rate_limit import check_rate_limit
@@ -100,7 +106,7 @@ WHATSAPP_CODE_GUESS_WINDOW_SECONDS = 600
 # 20/60s is generous enough for a real user checking a typo'd number a few
 # times, while still capping one IP from using this as a bulk phone-number
 # scanner against WAHA.
-WHATSAPP_CHECK_MAX_ATTEMPTS = 20
+WHATSAPP_CHECK_MAX_ATTEMPTS = 5
 WHATSAPP_CHECK_WINDOW_SECONDS = 60
 
 # The message body a user is asked to send: "MEOCE-123456", "MEOCE 123456",
@@ -470,3 +476,58 @@ def _waha_fetch_recent_messages(chat_id: str, limit: int = 20) -> list[dict]:
     response.raise_for_status()
 
     return response.json()
+
+
+def send_message(user_id: str, text: str) -> str:
+    """Sends a WhatsApp message to an account -- ONLY if that account has
+    already texted MEOCE first.
+
+    The gate: reads `user_identities` for `provider='whatsapp' AND
+    verified=true`. `verified` is set true exclusively by `_confirm_signup`/
+    `_confirm_attach` below, matching an inbound message this account
+    already sent -- so a caller cannot reach a number that has never
+    messaged MEOCE, no matter what phone-shaped string is passed in
+    elsewhere. This is what keeps this function from being the "message
+    anyone" capability the module docstring's anti-ban rule forbids.
+
+    Args:
+        user_id (str): The account to message.
+        text (str): The message body.
+
+    Returns:
+        str: The WAHA message id.
+
+    Raises:
+        ApiError: VALIDATION if this account has no verified WhatsApp
+            identity -- nothing to send to, safely.
+    """
+    sql_verified_phone = """
+        SELECT provider_uid FROM user_identities
+        WHERE account_id = %s AND provider = 'whatsapp' AND verified = true
+        """
+    params_verified_phone = (user_id,)
+    rows = query(sql_verified_phone, params_verified_phone)
+
+    if not rows:
+        raise ApiError(
+            ErrorCode.VALIDATION,
+            "this account has no verified WhatsApp contact -- nothing to send to",
+            ErrorStatus.UNPROCESSABLE_ENTITY,
+        )
+    phone = rows[0]["provider_uid"]
+
+    # NOTE: resolves the real chatId via WAHA rather than building
+    # "{phone}@c.us" directly -- same reasoning as _waha_check_exists()'s
+    # own docstring (WhatsApp's JID->LID migration).
+    chat_id = _waha_check_exists(phone)
+
+    settings = get_settings()
+    response = httpx.post(
+        f"{settings.waha_api_url}/api/sendText",
+        json={"chatId": chat_id, "text": text, "session": settings.waha_session},
+        headers={"X-Api-Key": settings.waha_api_key.get_secret_value()},
+        timeout=20.0,
+    )
+    response.raise_for_status()
+
+    return response.json()["id"]

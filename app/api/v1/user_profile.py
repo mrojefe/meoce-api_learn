@@ -13,7 +13,7 @@ from app.schemas import user_profile as schemas
 from app.schemas import whatsapp_auth as whatsapp_schemas
 from app.schemas.common import Envelope, ErrorEnvelope, envelope_
 from app.services import user_profile as services
-from app.services import whatsapp_auth as whatsapp_services
+from app.services import whatsapp as whatsapp_services
 
 router = APIRouter(prefix="/users", tags=["users"])
 

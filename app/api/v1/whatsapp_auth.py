@@ -13,8 +13,8 @@ reasoning `PATCH /users/me` is already grouped there.
 from fastapi import APIRouter, Request
 
 from app.schemas import whatsapp_auth as schemas
-from app.schemas.common import Envelope, ErrorEnvelope, envelope_
-from app.services import whatsapp_auth as services
+from app.schemas.common import Envelope, ErrorEnvelope, Phone, envelope_
+from app.services import whatsapp as services
 
 router = APIRouter(prefix="/auth/whatsapp", tags=["auth"])
 
@@ -68,14 +68,16 @@ def whatsapp_status(code: str):
 
 @router.get("/check", response_model=Envelope[schemas.CheckWhatsappResponse],
             responses={429: {"model": ErrorEnvelope}})
-def check_whatsapp_exists(phone: str, request: Request):
+def check_whatsapp_exists(phone: Phone, request: Request):
     """Whether a phone number has WhatsApp at all — no code, no signup.
 
     A lightweight pre-check, e.g. before offering the signup/attach flow
     for a number a caller just typed in.
 
     Args:
-        phone (str): E.164 phone number, digits only, no leading `+`.
+        phone (Phone): Any parseable phone number -- validated and
+            normalised to digits-only by the Phone schema type before this
+            function ever runs; garbage is a 422, not a wasted WAHA call.
         request (Request): Used to build the rate-limit key.
 
     Returns:

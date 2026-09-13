@@ -6,7 +6,7 @@ row (the root identity), one `user_identities` row (the provider-specific
 login method), and an empty `user_profiles` row (display data, filled in
 later). Only the `user_identities` INSERT differs between providers -- the
 `accounts`/`user_profiles` rows are identical every time. Before this
-module existed, `auth.py`, `google_auth.py`, and `whatsapp_auth.py` each
+module existed, `auth.py`, `google_auth.py`, and `whatsapp.py` each
 repeated the same three-statement transaction with only the identity
 INSERT swapped out.
 """
