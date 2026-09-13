@@ -65,17 +65,20 @@ def resolve_entitlements(user_id: str) -> PlanFeatures:
             >>> resolve_entitlements("c028c759-5fee-402b-a09f-ef39f3c22f31")
             PlanFeatures(max_watchlists=2, history_years_max=3, ...)
     """
+    # NOTE: subscriptions' real column is account_id, not user_id -- kept
+    # named user_id on the Python side to match the codebase-wide
+    # convention (JWT claim, get_current_user_id(), ~350 other call sites).
     sql_plan = """
         SELECT pf.feature_key, pf.value
         FROM subscriptions AS s
         JOIN plan_features AS pf
             ON pf.plan_code = s.plan_code
-        WHERE s.user_id = %s
+        WHERE s.account_id = %s
           AND s.status = 'active'
           AND (s.current_period_end IS NULL OR s.current_period_end > now())
         """
-    params_plan=user_id
-    rows = query(sql_plan, (params_plan,))
+    params_plan = (user_id,)
+    rows = query(sql_plan, params_plan)
 
     if rows:
         plan = {row["feature_key"]: row["value"] for row in rows}
@@ -105,15 +108,18 @@ def _active_grants(user_id: str) -> dict:
                 caller has none — true for everyone today, `user_features` is
                 unused in staging.
     """
+    # NOTE: user_features' real column is account_id, not user_id -- kept
+    # named user_id on the Python side to match the codebase-wide
+    # convention (JWT claim, get_current_user_id(), ~350 other call sites).
     sql_grants = """
                     SELECT DISTINCT ON (feature_key) feature_key, value
                     FROM user_features
-                    WHERE user_id = %s
+                    WHERE account_id = %s
                     AND (expires_at IS NULL OR expires_at > now())
                     ORDER BY feature_key, granted_at DESC
                 """
-    params_grants = user_id
-    rows = query(sql_grants, (params_grants,))
+    params_grants = (user_id,)
+    rows = query(sql_grants, params_grants)
 
     current_user_all_available_addon = {row["feature_key"]: row["value"] for row in rows}
     return current_user_all_available_addon
@@ -142,8 +148,8 @@ def _default_plan_features() -> dict:
                 this broken is our problem, not something to paper over here.
     """
     sql_default_plan = "SELECT feature_key, value FROM plan_features WHERE plan_code = %s"
-    params_default_plan = DEFAULT_PLAN_CODE
-    rows = query(sql_default_plan, (params_default_plan,))
+    params_default_plan = (DEFAULT_PLAN_CODE,)
+    rows = query(sql_default_plan, params_default_plan)
 
     if not rows:
         raise RuntimeError(
