@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     auth,
+    billing,
     drawings,
     entitlements,
     flags,
@@ -34,3 +35,4 @@ router.include_router(drawings.router)
 router.include_router(notification_settings.router)
 router.include_router(auth.router)
 router.include_router(whatsapp_auth.router)
+router.include_router(billing.router)

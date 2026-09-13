@@ -69,6 +69,8 @@ class ErrorCode(StrEnum):
     SYMBOL_ALREADY_IN_WATCHLIST = "symbol_already_in_watchlist"
     GOOGLE_CREDENTIAL_INVALID = "google_credential_invalid"
     GOOGLE_EMAIL_NOT_VERIFIED = "google_email_not_verified"
+    IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused"
+    PLAN_NOT_FOUND = "plan_not_found"
 
 
 logger = logging.getLogger("meoce.api")

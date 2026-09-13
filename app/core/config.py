@@ -80,6 +80,15 @@ class Settings(BaseSettings):
     # MagicDNS hostname, once one is running.
     cors_allowed_origins : Annotated[str, Field(alias="CORS_ALLOWED_ORIGINS")] = "http://localhost:3000"
 
+    # GeniusPay (payment provider). Server-only -- must never reach the
+    # frontend. base_url has a real default so a missing .env entry fails on
+    # the secret (required, no default) rather than silently hitting a wrong
+    # host.
+    geniuspay_base_url : Annotated[str, Field(alias="GENIUSPAY_BASE_URL")] = "https://geniuspay.ci/api/v1/merchant"
+    geniuspay_api_key : Annotated[str, Field(alias="GENIUSPAY_API_KEY")] = ""
+    geniuspay_api_secret : Annotated[SecretStr, Field(alias="GENIUSPAY_API_SECRET")]
+    geniuspay_webhook_secret : Annotated[SecretStr, Field(alias="GENIUSPAY_WEBHOOK_SECRET")]
+
 
 @lru_cache    
 def get_settings() -> Settings:

@@ -181,3 +181,22 @@ class PlanFeatures(BaseModel):
         description="Days of intraday history reachable.",
         examples=[5],
     )]
+
+
+class Plan(BaseModel):
+    """One row of `plans` + `plan_code`-joined `plan_features`, for the
+    frontend's plan-picker (`GET /plans`).
+
+    Distinct from `PlanFeatures`: that model answers "what does MY plan grant
+    me" for one authenticated caller. This one answers "what plans exist, what
+    do they cost, what do they grant" -- public, no caller, used to render the
+    picker before anyone has picked anything.
+    """
+
+    code: str
+    name: str
+    price_xof: int
+    interval: str
+    interval_count: int
+    features: PlanFeatures
+
