@@ -3,6 +3,7 @@
 -- version is written against `user_id`; this database's `subscriptions` and
 -- `payments` tables use `account_id`, so every reference is renamed to match.
 --
+-- REVIEW: this function is the actual money-crediting logic -- please read it.
 -- Called from app/services/billing.py, only after the payment's status has
 -- been confirmed against GeniusPay itself (never from the webhook payload
 -- alone in production -- see geniuspay.py's verify_webhook_signature() and

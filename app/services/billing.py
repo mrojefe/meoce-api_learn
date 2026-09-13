@@ -15,6 +15,8 @@ _real_eg/meoce-frontend's payment routes, adapted to account_id and to this
 service's own error contract.
 """
 
+from enum import StrEnum, unique
+
 from psycopg.types.json import Jsonb
 
 from app.core.db.database import query, transaction
@@ -22,6 +24,26 @@ from app.core.errors import ApiError, ConflictError, ErrorCode, ErrorStatus
 from app.core.reference import PlanCode
 from app.schemas.plans import Plan, PlanFeatures
 from app.services import payment_provider
+
+
+@unique
+class PaymentStatus(StrEnum):
+    """payments.status's real values. Not DB-enforced (no CHECK constraint --
+    verified directly against meoce_prod, 2026-09-13), so nothing else stops
+    a typo from writing a status this code, or anyone reading the table,
+    would not recognise.
+    """
+
+    PENDING = "pending"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
+PAYMENT_PROVIDER_NAME = "geniuspay"
+# NOTE: the literal provider name written into payments.provider /
+# subscriptions.payment_provider. A constant, not a repeated string, so the
+# day a second provider exists this is the one place to touch.
 
 
 def list_plans() -> list[Plan]:
@@ -92,6 +114,11 @@ def start_checkout(user_id: str, plan_code: str, idempotency_key: str,
     params_existing = (idempotency_key,)
     existing_rows = query(sql_existing, params_existing)
 
+    # REVIEW: idempotency dedupe. Same key + same plan -> replay the existing
+    # checkout_url (a retried request must not create a second payment row).
+    # Same key + a DIFFERENT plan -> reject instead of silently switching what
+    # the caller ends up paying for. This is the only thing standing between
+    # a client retry and a double charge -- please look at this branch.
     if existing_rows:
         existing = existing_rows[0]
         if existing["plan_code"] != plan_code:
@@ -117,12 +144,12 @@ def start_checkout(user_id: str, plan_code: str, idempotency_key: str,
     sql_insert_pending = """
         INSERT INTO payments (account_id, idempotency_key, provider, environment,
                                plan_code, periods_purchased, amount_xof, currency_code, status)
-        VALUES (%s, %s, 'geniuspay', %s, %s, 1, %s, 'XOF', 'pending')
+        VALUES (%s, %s, %s, %s, %s, 1, %s, 'XOF', %s)
         RETURNING id
         """
-    params_insert_pending = (user_id, idempotency_key,
+    params_insert_pending = (user_id, idempotency_key, PAYMENT_PROVIDER_NAME,
                               "sandbox" if payment_provider.is_sandbox() else "live",
-                              plan_code, plan["price_xof"])
+                              plan_code, plan["price_xof"], PaymentStatus.PENDING)
     payment_rows = query(sql_insert_pending, params_insert_pending)
     payment_id = payment_rows[0]["id"]
 
@@ -135,6 +162,10 @@ def start_checkout(user_id: str, plan_code: str, idempotency_key: str,
         metadata=metadata,
     )
 
+    # NOTE: provider_result["status"] is GeniusPay's own string (e.g. it may
+    # return null->normalised-to-"pending" on creation), not PaymentStatus --
+    # written through as-is rather than mapped, since sandbox has already been
+    # observed to return values not in PaymentStatus (see payment_provider.py).
     sql_update_reference = """
         UPDATE payments
         SET reference = %s, checkout_url = %s, status = %s, create_response = %s
@@ -181,6 +212,13 @@ def handle_webhook(raw_body: bytes, headers: dict) -> None:
     if signature_result in ("invalid", "expired"):
         raise UnauthorizedError(f"webhook signature {signature_result}")
 
+    # REVIEW: an "unverified" signature (no secret configured, or the
+    # signature/timestamp headers were absent) is deliberately NOT rejected
+    # here -- it falls through to re-checking GeniusPay's real status below,
+    # same as the proven real-prod pattern. Only "invalid"/"expired" (a
+    # signature that was PRESENT and wrong) raises above. Please confirm this
+    # reads right to you -- this is the one branch between a spoofed request
+    # and a credited payment if get_payment_status() below were ever bypassed.
     payload = json.loads(raw_body)
     reference = (payload.get("data") or {}).get("reference") or payload.get("reference")
     if not reference:
@@ -189,6 +227,10 @@ def handle_webhook(raw_body: bytes, headers: dict) -> None:
     try:
         provider_status = payment_provider.get_payment_status(reference)
     except RuntimeError:
+        # REVIEW: only reachable if the provider call itself fails (network,
+        # 4xx/5xx) AND the signature was valid AND this is sandbox. Never in
+        # production -- is_sandbox() requires a non-prod runtime AND a
+        # sandbox key, both, so a mis-set env var alone cannot open this path.
         if signature_result == "valid" and payment_provider.is_sandbox():
             provider_status = (payload.get("data") or payload)
         else:
@@ -215,9 +257,10 @@ def reconcile_stuck_payments() -> dict:
     """
     sql_stuck = """
         SELECT id, reference FROM payments
-        WHERE applied = false AND reference IS NOT NULL AND status != 'expired'
+        WHERE applied = false AND reference IS NOT NULL AND status != %s
         """
-    stuck_rows = query(sql_stuck)
+    params_stuck = (PaymentStatus.EXPIRED,)
+    stuck_rows = query(sql_stuck, params_stuck)
 
     reconciled = 0
     for row in stuck_rows:
@@ -227,18 +270,19 @@ def reconcile_stuck_payments() -> dict:
             if getattr(error, "not_found", False):
                 continue
             raise
-        if provider_status["status"] == "completed":
+        if provider_status["status"] == PaymentStatus.COMPLETED:
             _apply_verified_status(row["reference"], provider_status)
             reconciled += 1
 
     sql_expire = """
         UPDATE payments
-        SET status = 'expired'
+        SET status = %s
         WHERE applied = false AND reference IS NULL
-          AND status = 'pending' AND created_at < now() - interval '30 minutes'
+          AND status = %s AND created_at < now() - interval '30 minutes'
         RETURNING id
         """
-    expired_rows = query(sql_expire)
+    params_expire = (PaymentStatus.EXPIRED, PaymentStatus.PENDING)
+    expired_rows = query(sql_expire, params_expire)
 
     result = {"reconciled": reconciled, "expired": len(expired_rows)}
     return result
@@ -255,9 +299,16 @@ def _apply_verified_status(reference: str, provider_status: dict) -> None:
         provider_status (dict): Whatever get_payment_status() returned (or,
             sandbox-only, the trusted webhook payload).
     """
-    if provider_status.get("status") != "completed":
+    if provider_status.get("status") != PaymentStatus.COMPLETED:
         return
 
+    # REVIEW: this is the actual money-crediting path. mark-completed +
+    # apply_payment_to_subscription() + the audit event all run inside one
+    # transaction() -- a payment must never end up "completed" without also
+    # being credited, or vice versa. `WHERE applied = false` in _find below is
+    # what makes this safe to call twice for the same reference (webhook
+    # retry, then reconcile catching the same payment): the second call finds
+    # no row and returns without crediting again.
     with transaction() as conn:
         sql_find = "SELECT id FROM payments WHERE reference = %s AND applied = false"
         params_find = (reference,)
@@ -266,8 +317,8 @@ def _apply_verified_status(reference: str, provider_status: dict) -> None:
             return
         payment_id = row["id"]
 
-        sql_mark_completed = "UPDATE payments SET status = 'completed' WHERE id = %s"
-        params_mark_completed = (payment_id,)
+        sql_mark_completed = "UPDATE payments SET status = %s WHERE id = %s"
+        params_mark_completed = (PaymentStatus.COMPLETED, payment_id)
         conn.execute(sql_mark_completed, params_mark_completed)
 
         sql_apply = "SELECT apply_payment_to_subscription(%s)"
@@ -276,7 +327,8 @@ def _apply_verified_status(reference: str, provider_status: dict) -> None:
 
         sql_event = """
             INSERT INTO payment_events (payment_id, reference, event_type, status, source)
-            VALUES (%s, %s, 'payment.completed', 'completed', 'reconcile_or_webhook')
+            VALUES (%s, %s, %s, %s, %s)
             """
-        params_event = (payment_id, reference)
+        params_event = (payment_id, reference, "payment.completed",
+                         PaymentStatus.COMPLETED, "reconcile_or_webhook")
         conn.execute(sql_event, params_event)
