@@ -64,7 +64,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
 from app.core.config import get_settings
-from app.core.db.database import query
+from app.core.db.database import query, transaction
 from app.core.errors import ErrorCode, UnauthorizedError
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
@@ -197,19 +197,21 @@ def _find_or_link_account(payload: dict) -> str:
     # link a new 'google' identity onto this account, and clear the email
     # identity's credential so the password can't be used until reset --
     # safe because request_password_reset/reset_password work regardless
-    # of which identities currently exist for the account.
-    query(
-        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
-        "VALUES (%s, 'google', %s, true, now())",
-        (user_id, google_sub),
-        nothing_return=True,
-    )
-    query(
-        "UPDATE user_identities SET credential = NULL "
-        "WHERE account_id = %s AND provider = 'email'",
-        (user_id,),
-        nothing_return=True,
-    )
+    # of which identities currently exist for the account. Both writes go
+    # in one transaction() block -- two separate query() calls would each
+    # commit independently, so a failure between them could leave a new
+    # 'google' identity with the old password still live, or the reverse.
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+            "VALUES (%s, 'google', %s, true, now())",
+            (user_id, google_sub),
+        )
+        conn.execute(
+            "UPDATE user_identities SET credential = NULL "
+            "WHERE account_id = %s AND provider = 'email'",
+            (user_id,),
+        )
 
     _resync_google_fields(user_id, payload)
 
@@ -230,20 +232,25 @@ def _create_google_account(payload: dict) -> str:
     Returns:
         str: The new account's id.
     """
-    user_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
+    # accounts + the google identity + user_profiles go in one transaction:
+    # three separate query() calls would each commit independently, leaving
+    # an orphaned accounts row with no identity/profile at all if a later
+    # insert failed.
+    with transaction() as conn:
+        user_id = str(conn.execute(
+            "INSERT INTO accounts DEFAULT VALUES RETURNING id"
+        ).fetchone()["id"])
 
-    query(
-        "INSERT INTO user_identities "
-        "(account_id, provider, provider_uid, verified, verified_at, workspace_domain) "
-        "VALUES (%s, 'google', %s, true, now(), %s)",
-        (user_id, payload["sub"], payload.get("hd")),
-        nothing_return=True,
-    )
-    query(
-        "INSERT INTO user_profiles (id) VALUES (%s)",
-        (user_id,),
-        nothing_return=True,
-    )
+        conn.execute(
+            "INSERT INTO user_identities "
+            "(account_id, provider, provider_uid, verified, verified_at, workspace_domain) "
+            "VALUES (%s, 'google', %s, true, now(), %s)",
+            (user_id, payload["sub"], payload.get("hd")),
+        )
+        conn.execute(
+            "INSERT INTO user_profiles (id) VALUES (%s)",
+            (user_id,),
+        )
 
     # Per JF's 2026-09-13 decision: a Google-only account still gets its
     # own 'email' identity row (credential NULL, verified true) so

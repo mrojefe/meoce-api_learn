@@ -56,7 +56,7 @@ import httpx
 from fastapi import Request
 
 from app.core.config import get_settings
-from app.core.db.database import query
+from app.core.db.database import query, transaction
 from app.core.errors import ConflictError, ErrorCode
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
@@ -297,18 +297,23 @@ def _confirm_signup(phone: str) -> dict:
     if rows:
         user_id = str(rows[0]["account_id"])
     else:
-        user_id = str(query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"])
-        query(
-            "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
-            "VALUES (%s, 'whatsapp', %s, true, now())",
-            (user_id, phone),
-            nothing_return=True,
-        )
-        query(
-            "INSERT INTO user_profiles (id) VALUES (%s)",
-            (user_id,),
-            nothing_return=True,
-        )
+        # accounts + the whatsapp identity + user_profiles go in one
+        # transaction: three separate query() calls would each commit
+        # independently, leaving an orphaned accounts row with no
+        # identity/profile at all if a later insert failed.
+        with transaction() as conn:
+            user_id = str(conn.execute(
+                "INSERT INTO accounts DEFAULT VALUES RETURNING id"
+            ).fetchone()["id"])
+            conn.execute(
+                "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+                "VALUES (%s, 'whatsapp', %s, true, now())",
+                (user_id, phone),
+            )
+            conn.execute(
+                "INSERT INTO user_profiles (id) VALUES (%s)",
+                (user_id,),
+            )
 
     return {
         "status": "confirmed",

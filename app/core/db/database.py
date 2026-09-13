@@ -121,6 +121,39 @@ def query(sql: str, params: tuple = (), nothing_return:bool=False) -> list[dict]
 
         return cur.fetchall()        
 
+def transaction():
+    """Borrows one pooled connection for a whole block of writes.
+
+    `query()` borrows-and-returns its own connection per call, committing as
+    soon as that one statement finishes — fine for a single write, but wrong
+    for a sequence of writes that only makes sense together (e.g. signup's
+    accounts + user_identities + user_profiles rows). Two separate `query()`
+    calls are two separate commits: if the second one fails, the first has
+    already landed permanently — a real orphaned row, not a rollback.
+
+    Returns the raw psycopg connection (not wrapped in another helper) so
+    callers write plain `conn.execute(sql, params)` / `.fetchone()` inside the
+    block — the same %s-placeholder style as `query()`, just sharing one
+    connection and one transaction. psycopg's own `with conn:` context manager
+    commits on a clean exit and rolls back on any exception, so a failing
+    statement anywhere in the block undoes every write already made in it.
+
+    Returns:
+        AbstractContextManager[psycopg.Connection]: use as
+            `with transaction() as conn: conn.execute(...)`.
+
+    Examples:
+        >>> with transaction() as conn:
+        ...     row = conn.execute(
+        ...         "INSERT INTO accounts DEFAULT VALUES RETURNING id"
+        ...     ).fetchone()
+        ...     conn.execute(
+        ...         "INSERT INTO user_profiles (id) VALUES (%s)", (row["id"],)
+        ...     )
+    """
+    return get_pool().connection()
+
+
 def direct_query(sql: str, params: tuple | None = None, nothing_return=False) -> list[dict]:
     """Runs one SELECT on its own short-lived connection, outside the pool.
 

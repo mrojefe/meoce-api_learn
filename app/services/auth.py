@@ -6,7 +6,7 @@ independent branches, not variations of this one).
 from fastapi import Request
 
 from app.core.config import get_settings
-from app.core.db.database import query
+from app.core.db.database import query, transaction
 from app.core.errors import ConflictError, ErrorCode, UnauthorizedError
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.email_verify import (
@@ -183,23 +183,27 @@ def signup(email: str, password: str, request: Request) -> dict:
 
     # NOTE: identity schema is accounts (root) + user_identities (one row
     # per login method) + user_profiles (display) -- not a flat users
-    # table. Creating an account needs all three rows, not one INSERT.
-    account_id = query("INSERT INTO accounts DEFAULT VALUES RETURNING id")[0]["id"]
+    # table. Creating an account needs all three rows, so all three go in
+    # one transaction() block: three separate query() calls would each
+    # commit independently, leaving an orphaned accounts row with no
+    # identity/profile if a later insert failed (e.g. a duplicate email).
+    with transaction() as conn:
+        account_id = conn.execute(
+            "INSERT INTO accounts DEFAULT VALUES RETURNING id"
+        ).fetchone()["id"]
 
-    # password is already HardPassword-validated by SignupRequest before it gets here
-    query(
-        """
-        INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
-        VALUES (%s, 'email', %s, %s, false)
-        """,
-        (account_id, email, hash_password(password)),
-        nothing_return=True,
-    )
-    query(
-        "INSERT INTO user_profiles (id) VALUES (%s)",
-        (account_id,),
-        nothing_return=True,
-    )
+        # password is already HardPassword-validated by SignupRequest before it gets here
+        conn.execute(
+            """
+            INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
+            VALUES (%s, 'email', %s, %s, false)
+            """,
+            (account_id, email, hash_password(password)),
+        )
+        conn.execute(
+            "INSERT INTO user_profiles (id) VALUES (%s)",
+            (account_id,),
+        )
 
     row = {"id": account_id, "email": email}
     _send_verification(str(account_id), email)
