@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     waha_session : Annotated[str, Field(alias="WAHA_SESSION")] = "default"
     waha_meoce_number : Annotated[str, Field(alias="WAHA_MEOCE_NUMBER")]
 
+    # Comma-separated list of origins allowed to call this API from a
+    # browser (CORS). Defaults to the typical local frontend dev port --
+    # override in .env with the real frontend origin(s), e.g. a Tailscale
+    # MagicDNS hostname, once one is running.
+    cors_allowed_origins : Annotated[str, Field(alias="CORS_ALLOWED_ORIGINS")] = "http://localhost:3000"
+
 
 @lru_cache    
 def get_settings() -> Settings:

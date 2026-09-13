@@ -2,6 +2,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import router as v1_router
 from app.core.config import get_settings
@@ -39,6 +40,19 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs" if settings.env == "dev" else None,
     redoc_url="/redoc" if settings.env == "dev" else None,
+)
+
+# CORS: without this, no browser-based frontend can call this API at all
+# -- the browser blocks the response before the frontend's JS ever sees it.
+# allow_credentials=True because auth uses a Bearer token in a header, not
+# a cookie, but the frontend still needs to send that header cross-origin.
+cors_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",")]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 register_error_handler(app)
