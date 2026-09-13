@@ -29,7 +29,8 @@ def get_settings(user_id: str) -> dict:
             (SELECT provider_uid FROM user_identities
                 WHERE account_id = %s AND provider = 'email') AS email
         """
-    rows = query(sql, (user_id, user_id, user_id))
+    params = (user_id, user_id, user_id)
+    rows = query(sql, params)
 
     return rows[0]
 
@@ -45,19 +46,17 @@ def update_phone(user_id: str, phone: str | None) -> dict:
             dict: phone, phone_verified, email — as it now stands.
     """
     if phone is None:
-        query(
-            "DELETE FROM user_identities WHERE account_id = %s AND provider = 'whatsapp'",
-            (user_id,),
-            nothing_return=True,
-        )
+        sql = "DELETE FROM user_identities WHERE account_id = %s AND provider = 'whatsapp'"
+        params = (user_id,)
+        query(sql, params, nothing_return=True)
     else:
-        query(
+        sql = (
             "INSERT INTO user_identities (account_id, provider, provider_uid, verified) "
             "VALUES (%s, 'whatsapp', %s, false) "
             "ON CONFLICT (account_id, provider) DO UPDATE SET "
-            "provider_uid = EXCLUDED.provider_uid, verified = false, verified_at = NULL",
-            (user_id, phone),
-            nothing_return=True,
+            "provider_uid = EXCLUDED.provider_uid, verified = false, verified_at = NULL"
         )
+        params = (user_id, phone)
+        query(sql, params, nothing_return=True)
 
     return get_settings(user_id)

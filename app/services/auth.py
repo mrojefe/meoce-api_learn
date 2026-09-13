@@ -6,7 +6,7 @@ independent branches, not variations of this one).
 from fastapi import Request
 
 from app.core.config import get_settings
-from app.core.db.database import query, transaction
+from app.core.db.database import query
 from app.core.errors import ConflictError, ErrorCode, UnauthorizedError
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.email_verify import (
@@ -26,6 +26,7 @@ from app.core.security.deps.token_denylist import revoke_token
 from app.core.security.deps.user import user_ip
 from app.schemas.jwt import TokenAudience
 from app.services.email_sender import send_password_reset_email, send_verification_email
+from app.services.identity import create_account_with_identity
 
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 60
@@ -74,11 +75,12 @@ def login(email: str, password: str) -> dict:
 
     user_id = _get_user_id_by_email(email)
 
-    return {
+    result = {
         "access_token": create_access_token(user_id),
         "refresh_token": create_refresh_token(user_id),
         "token_type": "bearer",
     }
+    return result
 
 
 def logout(refresh_token: str, request: Request) -> None:
@@ -134,10 +136,11 @@ def refresh_access_token(refresh_token: str, request: Request) -> dict:
 
     user_id = _decode(refresh_token, TokenAudience.REFRESH, request).userId
 
-    return {
+    result = {
         "access_token": create_access_token(user_id),
         "token_type": "bearer",
     }
+    return result
 
 
 def signup(email: str, password: str, request: Request) -> dict:
@@ -183,32 +186,20 @@ def signup(email: str, password: str, request: Request) -> dict:
 
     # NOTE: identity schema is accounts (root) + user_identities (one row
     # per login method) + user_profiles (display) -- not a flat users
-    # table. Creating an account needs all three rows, so all three go in
-    # one transaction() block: three separate query() calls would each
-    # commit independently, leaving an orphaned accounts row with no
-    # identity/profile if a later insert failed (e.g. a duplicate email).
-    with transaction() as conn:
-        account_id = conn.execute(
-            "INSERT INTO accounts DEFAULT VALUES RETURNING id"
-        ).fetchone()["id"]
+    # table. create_account_with_identity() creates all three rows
+    # atomically (see app/services/identity.py).
+    # password is already HardPassword-validated by SignupRequest before it gets here
+    sql_identity = """
+        INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
+        VALUES (%s, 'email', %s, %s, false)
+        """
+    params_identity_rest = (email, hash_password(password))
+    account_id = create_account_with_identity(sql_identity, params_identity_rest)
 
-        # password is already HardPassword-validated by SignupRequest before it gets here
-        conn.execute(
-            """
-            INSERT INTO user_identities (account_id, provider, provider_uid, credential, verified)
-            VALUES (%s, 'email', %s, %s, false)
-            """,
-            (account_id, email, hash_password(password)),
-        )
-        conn.execute(
-            "INSERT INTO user_profiles (id) VALUES (%s)",
-            (account_id,),
-        )
-
-    row = {"id": account_id, "email": email}
+    result = {"id": account_id, "email": email}
     _send_verification(str(account_id), email)
 
-    return row
+    return result
 
 
 def resend_verification(email: str, request: Request) -> None:
@@ -262,12 +253,12 @@ def verify_email(token: str) -> bool:
     if user_id is None:
         return False
 
-    query(
+    sql = (
         "UPDATE user_identities SET verified = true, verified_at = now() "
-        "WHERE account_id = %s AND provider = 'email'",
-        (user_id,),
-        nothing_return=True,
+        "WHERE account_id = %s AND provider = 'email'"
     )
+    params = (user_id,)
+    query(sql, params, nothing_return=True)
     return True
 
 
@@ -343,11 +334,9 @@ def reset_password(token: str, new_password: str) -> None:
             code=ErrorCode.INVALID_TOKEN,
         )
 
-    query(
-        "UPDATE user_identities SET credential = %s WHERE account_id = %s AND provider = 'email'",
-        (hash_password(new_password), user_id),
-        nothing_return=True,
-    )
+    sql = "UPDATE user_identities SET credential = %s WHERE account_id = %s AND provider = 'email'"
+    params = (hash_password(new_password), user_id)
+    query(sql, params, nothing_return=True)
 
 
 def _send_verification(user_id: str, email: str) -> None:

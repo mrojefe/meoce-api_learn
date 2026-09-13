@@ -58,8 +58,8 @@ def get_profile(user_id: str) -> dict:
         JOIN accounts AS a ON a.id = u.id
         WHERE u.id = %s
         """
-    params_profile = user_id
-    rows = query(sql_profile, (params_profile,))
+    params_profile = (user_id,)
+    rows = query(sql_profile, params_profile)
 
     return rows[0]
 

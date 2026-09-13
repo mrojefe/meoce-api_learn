@@ -65,6 +65,7 @@ from google.oauth2 import id_token as google_id_token
 
 from app.core.config import get_settings
 from app.core.db.database import query, transaction
+from app.services.identity import create_account_with_identity
 from app.core.errors import ErrorCode, UnauthorizedError
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
@@ -133,11 +134,12 @@ def google_sign_in(id_token: str, request: Request) -> dict:
 
     user_id = _find_or_link_account(payload)
 
-    return {
+    result = {
         "access_token": create_access_token(user_id),
         "refresh_token": create_refresh_token(user_id),
         "token_type": "bearer",
     }
+    return result
 
 
 def _find_or_link_account(payload: dict) -> str:
@@ -165,10 +167,9 @@ def _find_or_link_account(payload: dict) -> str:
     # NOTE: identity schema is user_identities (one row per login method),
     # not a flat users table with a single auth_provider column -- "found
     # by google_sub" means a 'google' identity row already exists.
-    rows = query(
-        "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s",
-        (google_sub,),
-    )
+    sql_1 = "SELECT account_id FROM user_identities WHERE provider = 'google' AND provider_uid = %s"
+    params_1 = (google_sub,)
+    rows = query(sql_1, params_1)
 
     if rows:
         user_id = str(rows[0]["account_id"])
@@ -182,11 +183,12 @@ def _find_or_link_account(payload: dict) -> str:
     # flat-users design's "match a whatsapp account by email too" is no
     # longer reachable -- there is nothing to match against. Flagged to JF,
     # not silently dropped.
-    rows = query(
+    sql_2 = (
         "SELECT account_id, verified, credential FROM user_identities "
-        "WHERE provider = 'email' AND provider_uid = %s",
-        (payload["email"],),
+        "WHERE provider = 'email' AND provider_uid = %s"
     )
+    params_2 = (payload["email"],)
+    rows = query(sql_2, params_2)
 
     if not rows:
         return _create_google_account(payload)
@@ -201,17 +203,18 @@ def _find_or_link_account(payload: dict) -> str:
     # in one transaction() block -- two separate query() calls would each
     # commit independently, so a failure between them could leave a new
     # 'google' identity with the old password still live, or the reverse.
+    sql_3 = (
+        "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+        "VALUES (%s, 'google', %s, true, now())"
+    )
+    params_3 = (user_id, google_sub)
+
+    sql_4 = "UPDATE user_identities SET credential = NULL WHERE account_id = %s AND provider = 'email'"
+    params_4 = (user_id,)
+
     with transaction() as conn:
-        conn.execute(
-            "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
-            "VALUES (%s, 'google', %s, true, now())",
-            (user_id, google_sub),
-        )
-        conn.execute(
-            "UPDATE user_identities SET credential = NULL "
-            "WHERE account_id = %s AND provider = 'email'",
-            (user_id,),
-        )
+        conn.execute(sql_3, params_3)
+        conn.execute(sql_4, params_4)
 
     _resync_google_fields(user_id, payload)
 
@@ -224,7 +227,10 @@ def _create_google_account(payload: dict) -> str:
     NOTE: identity schema is accounts (root) + user_identities (one row
     per login method) + user_profiles (display) -- unlike the old flat
     users table, there is no mirror trigger auto-creating user_profiles
-    here, so this explicitly inserts all three rows itself.
+    here. create_account_with_identity() creates all three rows
+    atomically (see app/services/identity.py) -- same helper
+    auth.py's signup() and whatsapp_auth.py's _confirm_signup() use, only
+    the identity INSERT differs per provider.
 
     Args:
         payload (dict): The decoded, already-verified Google ID token.
@@ -232,25 +238,13 @@ def _create_google_account(payload: dict) -> str:
     Returns:
         str: The new account's id.
     """
-    # accounts + the google identity + user_profiles go in one transaction:
-    # three separate query() calls would each commit independently, leaving
-    # an orphaned accounts row with no identity/profile at all if a later
-    # insert failed.
-    with transaction() as conn:
-        user_id = str(conn.execute(
-            "INSERT INTO accounts DEFAULT VALUES RETURNING id"
-        ).fetchone()["id"])
-
-        conn.execute(
-            "INSERT INTO user_identities "
-            "(account_id, provider, provider_uid, verified, verified_at, workspace_domain) "
-            "VALUES (%s, 'google', %s, true, now(), %s)",
-            (user_id, payload["sub"], payload.get("hd")),
-        )
-        conn.execute(
-            "INSERT INTO user_profiles (id) VALUES (%s)",
-            (user_id,),
-        )
+    sql_identity = (
+        "INSERT INTO user_identities "
+        "(account_id, provider, provider_uid, verified, verified_at, workspace_domain) "
+        "VALUES (%s, 'google', %s, true, now(), %s)"
+    )
+    params_identity_rest = (payload["sub"], payload.get("hd"))
+    user_id = create_account_with_identity(sql_identity, params_identity_rest)
 
     # Per JF's 2026-09-13 decision: a Google-only account still gets its
     # own 'email' identity row (credential NULL, verified true) so
@@ -262,11 +256,9 @@ def _create_google_account(payload: dict) -> str:
 
     default_language = _language_from_locale(payload.get("locale"))
     if default_language is not None:
-        query(
-            "INSERT INTO user_preferences (user_id, default_language) VALUES (%s, %s)",
-            (user_id, default_language),
-            nothing_return=True,
-        )
+        sql = "INSERT INTO user_preferences (user_id, default_language) VALUES (%s, %s)"
+        params = (user_id, default_language)
+        query(sql, params, nothing_return=True)
     # else: no usable locale claim — leave default_language at its DB
     # default (see user_preferences.py's get_preferences docstring), no
     # row to insert here at all since one isn't needed until the first
@@ -300,18 +292,18 @@ def _resync_google_fields(user_id: str, payload: dict) -> None:
     # This includes silently reverting a user's manually-changed
     # default_language to their current Google locale — intentional, not
     # a bug.
-    query(
+    sql = (
         "UPDATE user_identities SET workspace_domain = %s, "
         "display_name_snapshot = %s, avatar_url_snapshot = %s "
-        "WHERE account_id = %s AND provider = 'google'",
-        (
-            payload.get("hd"),
-            f"{payload.get('given_name', '')} {payload.get('family_name', '')}".strip() or None,
-            payload.get("picture"),
-            user_id,
-        ),
-        nothing_return=True,
+        "WHERE account_id = %s AND provider = 'google'"
     )
+    params = (
+        payload.get("hd"),
+        f"{payload.get('given_name', '')} {payload.get('family_name', '')}".strip() or None,
+        payload.get("picture"),
+        user_id,
+    )
+    query(sql, params, nothing_return=True)
 
     # Per JF's 2026-09-13 decision: email is also Google-authoritative,
     # kept in sync on the account's 'email' identity row (separate from
@@ -329,15 +321,13 @@ def _resync_google_fields(user_id: str, payload: dict) -> None:
 
     default_language = _language_from_locale(payload.get("locale"))
     if default_language is not None:
-        query(
-            """
+        sql = """
             INSERT INTO user_preferences (user_id, default_language)
             VALUES (%s, %s)
             ON CONFLICT (user_id) DO UPDATE SET default_language = EXCLUDED.default_language
-            """,
-            (user_id, default_language),
-            nothing_return=True,
-        )
+            """
+        params = (user_id, default_language)
+        query(sql, params, nothing_return=True)
     # else: no usable locale claim on this sign-in — leave whatever
     # default_language is already on file untouched, rather than
     # clobbering a real value with a default.
@@ -358,14 +348,14 @@ def _sync_email_identity(user_id: str, email: str) -> None:
         user_id (str): The account being written.
         email (str): The token's current `email` claim.
     """
-    query(
+    sql = (
         "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
         "VALUES (%s, 'email', %s, true, now()) "
         "ON CONFLICT (account_id, provider) DO UPDATE SET "
-        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()",
-        (user_id, email),
-        nothing_return=True,
+        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()"
     )
+    params = (user_id, email)
+    query(sql, params, nothing_return=True)
 
 
 def _sync_profile_fields(user_id: str, payload: dict) -> None:
@@ -378,12 +368,12 @@ def _sync_profile_fields(user_id: str, payload: dict) -> None:
         user_id (str): The account being written.
         payload (dict): The decoded, already-verified Google ID token.
     """
-    query(
+    sql = (
         "UPDATE user_profiles SET first_name = %s, last_name = %s, "
-        "avatar_url = %s, last_login = now() WHERE id = %s",
-        (payload.get("given_name"), payload.get("family_name"), payload.get("picture"), user_id),
-        nothing_return=True,
+        "avatar_url = %s, last_login = now() WHERE id = %s"
     )
+    params = (payload.get("given_name"), payload.get("family_name"), payload.get("picture"), user_id)
+    query(sql, params, nothing_return=True)
 
 
 def _language_from_locale(locale: str | None) -> str | None:

@@ -29,15 +29,15 @@ def _current_user_storage_pass (user_mail: EmailStr):
                         WHERE provider = 'email' AND provider_uid = %s
                         """
 
-        parms_stored_pass = user_mail
+        params_stored_pass = (user_mail,)
 
-        rows = query(sql_stored_pass, (parms_stored_pass,))
+        rows = query(sql_stored_pass, params_stored_pass)
 
         if not rows :
             raise UnauthorizedError("This email is not registered")
         else :
            sql_stored_pass += """ and verified = true """
-           rows = query(sql_stored_pass, (parms_stored_pass,))
+           rows = query(sql_stored_pass, params_stored_pass)
 
            if not rows :
             raise UnauthorizedError("The password is likely not validate yet contact the support")

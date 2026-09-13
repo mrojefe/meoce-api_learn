@@ -56,7 +56,7 @@ import httpx
 from fastapi import Request
 
 from app.core.config import get_settings
-from app.core.db.database import query, transaction
+from app.core.db.database import query
 from app.core.errors import ConflictError, ErrorCode
 from app.core.reference import StartRateLimitKeyTypes, valide_rate_limite_key
 from app.core.security.deps.jwt import create_access_token, create_refresh_token
@@ -68,6 +68,7 @@ from app.core.security.deps.whatsapp_code import (
     generate_whatsapp_code,
     store_whatsapp_code,
 )
+from app.services.identity import create_account_with_identity
 
 WHATSAPP_CODE_EXPIRES_IN_SECONDS = WHATSAPP_CODE_TTL_MINUTES * 60
 
@@ -131,13 +132,15 @@ def start_whatsapp_signup(request: Request) -> dict:
     )
 
     code = generate_whatsapp_code()
-    store_whatsapp_code(code, {"issued_at": time.time()})
+    payload = {"issued_at": time.time()}
+    store_whatsapp_code(code, payload)
 
-    return {
+    result = {
         "code": code,
         "whatsapp_number": get_settings().waha_meoce_number,
         "expires_in_seconds": WHATSAPP_CODE_EXPIRES_IN_SECONDS,
     }
+    return result
 
 
 def start_whatsapp_attach(user_id: str, request: Request) -> dict:
@@ -168,13 +171,15 @@ def start_whatsapp_attach(user_id: str, request: Request) -> dict:
     )
 
     code = generate_whatsapp_code()
-    store_whatsapp_code(code, {"issued_at": time.time(), "user_id": user_id})
+    payload = {"issued_at": time.time(), "user_id": user_id}
+    store_whatsapp_code(code, payload)
 
-    return {
+    result = {
         "code": code,
         "whatsapp_number": get_settings().waha_meoce_number,
         "expires_in_seconds": WHATSAPP_CODE_EXPIRES_IN_SECONDS,
     }
+    return result
 
 
 def check_whatsapp_status(code: str) -> dict:
@@ -221,7 +226,8 @@ def check_whatsapp_status(code: str) -> dict:
             WHATSAPP_CODE_GUESS_MAX_ATTEMPTS, WHATSAPP_CODE_GUESS_WINDOW_SECONDS,
             "too many status checks for this code, try again later",
         )
-        return {"status": "pending"}
+        result = {"status": "pending"}
+        return result
 
     # The code exists, but nothing has matched it yet — that finding out
     # requires reading WAHA, which _find_matching_phone does. If nothing
@@ -232,7 +238,8 @@ def check_whatsapp_status(code: str) -> dict:
 
     if phone is None:
         store_whatsapp_code(code, payload)
-        return {"status": "pending"}
+        result = {"status": "pending"}
+        return result
 
     if "user_id" in payload:
         return _confirm_attach(payload["user_id"], phone)
@@ -289,38 +296,32 @@ def _confirm_signup(phone: str) -> dict:
     # NOTE: identity schema is user_identities (one row per login method),
     # not a flat users.phone column -- provider='whatsapp' rows are keyed
     # by phone as provider_uid.
-    rows = query(
-        "SELECT account_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s",
-        (phone,),
-    )
+    sql_lookup = "SELECT account_id FROM user_identities WHERE provider = 'whatsapp' AND provider_uid = %s"
+    params_lookup = (phone,)
+    rows = query(sql_lookup, params_lookup)
 
     if rows:
         user_id = str(rows[0]["account_id"])
     else:
-        # accounts + the whatsapp identity + user_profiles go in one
-        # transaction: three separate query() calls would each commit
-        # independently, leaving an orphaned accounts row with no
-        # identity/profile at all if a later insert failed.
-        with transaction() as conn:
-            user_id = str(conn.execute(
-                "INSERT INTO accounts DEFAULT VALUES RETURNING id"
-            ).fetchone()["id"])
-            conn.execute(
-                "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
-                "VALUES (%s, 'whatsapp', %s, true, now())",
-                (user_id, phone),
-            )
-            conn.execute(
-                "INSERT INTO user_profiles (id) VALUES (%s)",
-                (user_id,),
-            )
+        # create_account_with_identity() creates accounts + the whatsapp
+        # identity + user_profiles atomically (see
+        # app/services/identity.py) -- same helper auth.py's signup() and
+        # google_auth.py's _create_google_account() use, only the
+        # identity INSERT differs per provider.
+        sql_identity = (
+            "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
+            "VALUES (%s, 'whatsapp', %s, true, now())"
+        )
+        params_identity_rest = (phone,)
+        user_id = create_account_with_identity(sql_identity, params_identity_rest)
 
-    return {
+    result = {
         "status": "confirmed",
         "access_token": create_access_token(user_id),
         "refresh_token": create_refresh_token(user_id),
         "token_type": "bearer",
     }
+    return result
 
 
 def _confirm_attach(user_id: str, phone: str) -> dict:
@@ -349,7 +350,8 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
         "SELECT EXISTS (SELECT 1 FROM user_identities "
         "WHERE provider = 'whatsapp' AND provider_uid = %s AND account_id != %s)"
     )
-    rows_taken = query(sql_taken, (phone, user_id))
+    params_taken = (phone, user_id)
+    rows_taken = query(sql_taken, params_taken)
 
     if rows_taken[0]["exists"]:
         raise ConflictError(
@@ -357,16 +359,17 @@ def _confirm_attach(user_id: str, phone: str) -> dict:
             ErrorCode.PHONE_ALREADY_LINKED,
         )
 
-    query(
+    sql = (
         "INSERT INTO user_identities (account_id, provider, provider_uid, verified, verified_at) "
         "VALUES (%s, 'whatsapp', %s, true, now()) "
         "ON CONFLICT (account_id, provider) DO UPDATE SET "
-        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()",
-        (user_id, phone),
-        nothing_return=True,
+        "provider_uid = EXCLUDED.provider_uid, verified = true, verified_at = now()"
     )
+    params = (user_id, phone)
+    query(sql, params, nothing_return=True)
 
-    return {"status": "confirmed"}
+    result = {"status": "confirmed"}
+    return result
 
 
 def check_whatsapp_exists(phone: str, request: Request) -> bool:
