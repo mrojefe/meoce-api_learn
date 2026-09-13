@@ -11,6 +11,7 @@ from app.api.v1 import (
     health,
     instruments,
     notification_settings,
+    plans,
     reference,
     subscription,
     user_preferences,
@@ -36,3 +37,4 @@ router.include_router(notification_settings.router)
 router.include_router(auth.router)
 router.include_router(whatsapp_auth.router)
 router.include_router(billing.router)
+router.include_router(plans.router)

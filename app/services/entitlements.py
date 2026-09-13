@@ -68,11 +68,18 @@ def resolve_entitlements(user_id: str) -> PlanFeatures:
     # NOTE: subscriptions' real column is account_id, not user_id -- kept
     # named user_id on the Python side to match the codebase-wide
     # convention (JWT claim, get_current_user_id(), ~350 other call sites).
+    #
+    # Reads subscription_features -- a SNAPSHOT taken by
+    # apply_payment_to_subscription() at the moment this subscription was
+    # last paid for -- not a live join to plan_features. If plan_features
+    # changes later (an admin edits a plan's limits), an existing paying
+    # subscriber keeps what they actually bought until their next payment
+    # refreshes the snapshot; a live join would have changed it retroactively.
     sql_plan = """
-        SELECT pf.feature_key, pf.value
+        SELECT sf.feature_key, sf.value_snapshot AS value
         FROM subscriptions AS s
-        JOIN plan_features AS pf
-            ON pf.plan_code = s.plan_code
+        JOIN subscription_features AS sf
+            ON sf.subscription_id = s.id
         WHERE s.account_id = %s
           AND s.status = 'active'
           AND (s.current_period_end IS NULL OR s.current_period_end > now())

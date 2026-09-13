@@ -1,8 +1,14 @@
 """Guards the entitlements-resolution service against the real database.
 
 Integration, not unit: `resolve_entitlements` reads `subscriptions`/
-`plan_features`/`user_features` directly, so this needs a reachable
+`subscription_features`/`user_features` directly, so this needs a reachable
 database -- same reasoning as `test_subscription.py`.
+
+`subscription_features` is a SNAPSHOT written by apply_payment_to_subscription()
+-- resolve_entitlements() no longer live-joins plan_features, so a fixture
+that creates a subscription must also write the subscription_features rows
+that function would have written, or the test would be asserting against a
+read path that no longer exists.
 """
 
 
@@ -36,11 +42,23 @@ def test_resolve_entitlements_falls_back_to_free_plan(existing_account):
 
 
 def test_resolve_entitlements_uses_a_real_active_subscription(existing_account):
-    """An active subscription's plan_features values show up in the
-    returned PlanFeatures, not the free plan's."""
-    sql = "INSERT INTO subscriptions (account_id, plan_code, status) VALUES (%s, 'premium', 'active')"
-    params = (existing_account,)
-    query(sql, params, nothing_return=True)
+    """An active subscription's snapshotted subscription_features values
+    show up in the returned PlanFeatures, not the free plan's -- reading the
+    snapshot apply_payment_to_subscription() would have written, not a live
+    join to plan_features."""
+    sql_sub = """
+        INSERT INTO subscriptions (account_id, plan_code, status)
+        VALUES (%s, 'premium', 'active') RETURNING id
+        """
+    params_sub = (existing_account,)
+    subscription_id = query(sql_sub, params_sub)[0]["id"]
+
+    sql_snapshot = """
+        INSERT INTO subscription_features (subscription_id, feature_key, value_snapshot)
+        SELECT %s, feature_key, value FROM plan_features WHERE plan_code = 'premium'
+        """
+    params_snapshot = (subscription_id,)
+    query(sql_snapshot, params_snapshot, nothing_return=True)
 
     result = resolve_entitlements(existing_account)
 
